@@ -15,16 +15,24 @@ const app: Application = express();
 
 // Security middleware
 app.use(helmet());
+
+// CORS configuration
+const corsOrigin = process.env.NODE_ENV === 'production'
+  ? process.env.CORS_ORIGIN
+  : 'http://localhost:5173';
+
+if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGIN) {
+  logger.warn('CORS_ORIGIN not set in production. CORS will reject all cross-origin requests.');
+}
+
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? process.env.CORS_ORIGIN
-    : 'http://localhost:5173',
+  origin: corsOrigin || false,
   credentials: true,
 }));
 
-// Body parsing
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsing with size limits
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Request logging
 app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -52,14 +60,10 @@ app.use((_req: Request, res: Response) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-// Error handler
+// Error handler — never leak internal details
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error('Unhandled error:', err);
-  res.status(500).json({
-    error: process.env.NODE_ENV === 'production'
-      ? 'Internal server error'
-      : err.message
-  });
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 export default app;

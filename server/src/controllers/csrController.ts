@@ -2,9 +2,23 @@ import { Request, Response } from 'express';
 import { CSRRequest } from '../models/CSRRequest';
 import { CertificateAuthority } from '../models/CertificateAuthority';
 import { Server } from '../models/Server';
-import { executePowerShell, submitCSR } from '../services/powershellService';
+import { executePowerShell, submitCSR, validateHostname, sanitizePSString } from '../services/powershellService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
+
+// Validate and sanitize certificate subject fields (prevent INF/PS injection)
+const SAFE_SUBJECT_REGEX = /^[a-zA-Z0-9 .,_@()-]+$/;
+const SAFE_HASH_ALGORITHMS = new Set(['SHA256', 'SHA384', 'SHA512', 'SHA1']);
+const VALID_KEY_SIZES = new Set([2048, 4096]);
+
+function validateSubjectField(value: string): boolean {
+  return SAFE_SUBJECT_REGEX.test(value) && value.length <= 200;
+}
+
+function validateSAN(san: string): boolean {
+  // SANs should be valid DNS names, IPs, or email addresses
+  return /^[a-zA-Z0-9.*@_-]+(\.[a-zA-Z0-9*_-]+)*$/.test(san) && san.length <= 253;
+}
 
 export async function listCSRs(req: Request, res: Response): Promise<void> {
   try {
@@ -149,13 +163,13 @@ export async function updateCSR(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    // Remove fields that shouldn't be updated
-    delete updates._id;
-    delete updates.status;
-    delete updates.requestedBy;
-    delete updates.requestedAt;
-
-    Object.assign(csr, updates);
+    // Whitelist allowed fields to prevent mass assignment
+    const allowedFields = ['commonName', 'subjectAlternativeNames', 'subject', 'keySize', 'keyAlgorithm', 'hashAlgorithm', 'templateName', 'targetCAId', 'targetServerId'] as const;
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        (csr as any)[field] = req.body[field];
+      }
+    }
     await csr.save();
 
     logger.info(`CSR request ${id} updated by ${req.user?.username}`);
@@ -184,11 +198,45 @@ export async function generateCSR(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
+    // Validate all user-supplied values before building INF content
+    if (!validateSubjectField(csr.commonName)) {
+      res.status(400).json({ error: 'Invalid common name: contains disallowed characters' });
+      return;
+    }
+
+    if (!SAFE_HASH_ALGORITHMS.has(csr.hashAlgorithm)) {
+      res.status(400).json({ error: `Invalid hash algorithm. Allowed: ${[...SAFE_HASH_ALGORITHMS].join(', ')}` });
+      return;
+    }
+
+    if (!VALID_KEY_SIZES.has(csr.keySize)) {
+      res.status(400).json({ error: `Invalid key size. Allowed: ${[...VALID_KEY_SIZES].join(', ')}` });
+      return;
+    }
+
+    // Validate subject fields
+    const subjectFields = ['organization', 'organizationalUnit', 'locality', 'state', 'country'] as const;
+    const subject = csr.subject as Record<string, string | undefined>;
+    for (const field of subjectFields) {
+      if (subject[field] && !validateSubjectField(subject[field]!)) {
+        res.status(400).json({ error: `Invalid subject field '${field}': contains disallowed characters` });
+        return;
+      }
+    }
+
+    // Validate SANs
+    for (const san of csr.subjectAlternativeNames) {
+      if (!validateSAN(san)) {
+        res.status(400).json({ error: `Invalid SAN '${san}': must be a valid DNS name` });
+        return;
+      }
+    }
+
     csr.status = 'pending';
     updateWorkflowStep(csr, 'Generate CSR', 'pending');
     await csr.save();
 
-    // Build INF file content
+    // Build INF file content (all values validated above)
     const sans = csr.subjectAlternativeNames.map((san, i) => `DNS.${i + 1}=${san}`).join('\n');
     const subjectLine = buildSubjectLine(csr);
 
@@ -221,13 +269,21 @@ ${sans ? `[Extensions]\n2.5.29.17 = "{text}"\n_continue_ = "${sans.replace(/\n/g
     const targetServer = csr.targetServerId as any;
     const computerName = targetServer?.fqdn || 'localhost';
 
+    // Validate remote computer name if not localhost
+    if (computerName !== 'localhost' && !validateHostname(computerName)) {
+      res.status(400).json({ error: 'Invalid target server hostname' });
+      return;
+    }
+
+    // Use the CSR's MongoDB ObjectId (safe hex string) for temp file naming
+    const safeId = String(csr._id);
     const result = await executePowerShell({
       script: `
         $infContent = @'
 ${infContent}
 '@
-        $infPath = Join-Path $env:TEMP "${csr._id}.inf"
-        $csrPath = Join-Path $env:TEMP "${csr._id}.csr"
+        $infPath = Join-Path $env:TEMP '${safeId}.inf'
+        $csrPath = Join-Path $env:TEMP '${safeId}.csr'
 
         $infContent | Out-File -FilePath $infPath -Encoding ASCII
 

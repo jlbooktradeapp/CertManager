@@ -18,6 +18,39 @@ export interface PowerShellOptions {
 
 const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
 
+// Allowed script files to prevent path traversal
+const ALLOWED_SCRIPTS = new Set([
+  'Bind-IISCertificate.ps1',
+  'Get-CAInfo.ps1',
+  'Get-IssuedCertificates.ps1',
+  'Install-Certificate.ps1',
+  'New-CertificateRequest.ps1',
+  'Submit-CertificateRequest.ps1',
+]);
+
+// Sanitize a string value for safe use in PowerShell single-quoted strings.
+// In PS single-quoted strings, the only escape is '' for a literal single quote.
+function sanitizePSString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+// Validate that a value contains only safe characters for hostnames/FQDN
+const SAFE_HOSTNAME_REGEX = /^[a-zA-Z0-9._-]+$/;
+
+function validateHostname(hostname: string): boolean {
+  return SAFE_HOSTNAME_REGEX.test(hostname) && hostname.length <= 253;
+}
+
+// Validate that a value contains only safe characters for a CA config string (hostname\CAName)
+const SAFE_CONFIG_STRING_REGEX = /^[a-zA-Z0-9._\\-]+$/;
+
+function validateConfigString(value: string): boolean {
+  return SAFE_CONFIG_STRING_REGEX.test(value) && value.length <= 500;
+}
+
+// Validate PowerShell parameter keys (must be alphanumeric)
+const SAFE_PARAM_KEY_REGEX = /^[a-zA-Z][a-zA-Z0-9]*$/;
+
 export async function executePowerShell(options: PowerShellOptions): Promise<PowerShellResult> {
   const { script, scriptFile, parameters = {}, timeout = 60000, remoteComputer } = options;
 
@@ -31,8 +64,20 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
     let command: string;
 
     if (scriptFile) {
+      // Validate against allowlist to prevent path traversal
+      if (!ALLOWED_SCRIPTS.has(scriptFile)) {
+        resolve({ success: false, output: '', error: `Script not allowed: ${scriptFile}` });
+        return;
+      }
       const fullPath = path.join(SCRIPTS_DIR, scriptFile);
-      command = `& '${fullPath}'`;
+      // Verify the resolved path is still within SCRIPTS_DIR
+      const resolvedPath = path.resolve(fullPath);
+      const resolvedScriptsDir = path.resolve(SCRIPTS_DIR);
+      if (!resolvedPath.startsWith(resolvedScriptsDir)) {
+        resolve({ success: false, output: '', error: 'Invalid script path' });
+        return;
+      }
+      command = `& '${sanitizePSString(fullPath)}'`;
     } else if (script) {
       command = script;
     } else {
@@ -40,15 +85,22 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
       return;
     }
 
-    // Add parameters
+    // Add parameters using single-quoted strings for safety
     const paramStrings = Object.entries(parameters).map(([key, value]) => {
+      if (!SAFE_PARAM_KEY_REGEX.test(key)) {
+        throw new Error(`Invalid parameter key: ${key}`);
+      }
       if (typeof value === 'boolean') {
         return value ? `-${key}` : '';
       }
-      if (typeof value === 'string' && value.includes(' ')) {
-        return `-${key} "${value}"`;
+      if (typeof value === 'number') {
+        if (!Number.isFinite(value)) {
+          throw new Error(`Invalid numeric parameter: ${key}`);
+        }
+        return `-${key} ${value}`;
       }
-      return `-${key} ${value}`;
+      // Use single-quoted strings to prevent variable expansion and injection
+      return `-${key} '${sanitizePSString(String(value))}'`;
     }).filter(Boolean);
 
     if (paramStrings.length > 0) {
@@ -57,12 +109,16 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
 
     // Wrap in remote execution if needed
     if (remoteComputer) {
-      command = `Invoke-Command -ComputerName ${remoteComputer} -ScriptBlock { ${command} }`;
+      if (!validateHostname(remoteComputer)) {
+        resolve({ success: false, output: '', error: 'Invalid remote computer name' });
+        return;
+      }
+      command = `Invoke-Command -ComputerName '${sanitizePSString(remoteComputer)}' -ScriptBlock { ${command} }`;
     }
 
     args.push('-Command', command);
 
-    logger.debug(`Executing PowerShell: ${command}`);
+    logger.debug('Executing PowerShell command', { scriptFile: scriptFile || '(inline)' });
 
     const ps = spawn('powershell.exe', args, {
       windowsHide: true,
@@ -97,8 +153,11 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
 }
 
 export async function testConnection(hostname: string): Promise<boolean> {
+  if (!validateHostname(hostname)) {
+    return false;
+  }
   const result = await executePowerShell({
-    script: `Test-Connection -ComputerName "${hostname}" -Count 1 -Quiet`,
+    script: `Test-Connection -ComputerName '${sanitizePSString(hostname)}' -Count 1 -Quiet`,
     timeout: 10000,
   });
 
@@ -106,8 +165,11 @@ export async function testConnection(hostname: string): Promise<boolean> {
 }
 
 export async function testWinRM(hostname: string): Promise<boolean> {
+  if (!validateHostname(hostname)) {
+    return false;
+  }
   const result = await executePowerShell({
-    script: `Test-WSMan -ComputerName "${hostname}" -ErrorAction SilentlyContinue | Out-Null; $?`,
+    script: `Test-WSMan -ComputerName '${sanitizePSString(hostname)}' -ErrorAction SilentlyContinue | Out-Null; $?`,
     timeout: 15000,
   });
 
@@ -115,9 +177,12 @@ export async function testWinRM(hostname: string): Promise<boolean> {
 }
 
 export async function getRemoteCertificates(hostname: string): Promise<PowerShellResult> {
+  if (!validateHostname(hostname)) {
+    return { success: false, output: '', error: 'Invalid hostname' };
+  }
   return executePowerShell({
     script: `
-      Invoke-Command -ComputerName "${hostname}" -ScriptBlock {
+      Invoke-Command -ComputerName '${sanitizePSString(hostname)}' -ScriptBlock {
         Get-ChildItem -Path Cert:\\LocalMachine\\My |
         Select-Object Thumbprint, Subject, NotBefore, NotAfter, Issuer |
         ConvertTo-Json -Compress
@@ -128,6 +193,9 @@ export async function getRemoteCertificates(hostname: string): Promise<PowerShel
 }
 
 export async function getCAIssuedCertificates(configString: string): Promise<PowerShellResult> {
+  if (!validateConfigString(configString)) {
+    return { success: false, output: '', error: 'Invalid CA config string' };
+  }
   return executePowerShell({
     scriptFile: 'Get-IssuedCertificates.ps1',
     parameters: { ConfigString: configString },
@@ -140,6 +208,13 @@ export async function submitCSR(
   configString: string,
   template: string
 ): Promise<PowerShellResult> {
+  if (!validateConfigString(configString)) {
+    return { success: false, output: '', error: 'Invalid CA config string' };
+  }
+  // Validate template name (alphanumeric, hyphens, spaces only)
+  if (!/^[a-zA-Z0-9 _-]+$/.test(template)) {
+    return { success: false, output: '', error: 'Invalid template name' };
+  }
   return executePowerShell({
     scriptFile: 'Submit-CertificateRequest.ps1',
     parameters: {
@@ -155,6 +230,9 @@ export async function installCertificate(
   hostname: string,
   certPath: string
 ): Promise<PowerShellResult> {
+  if (!validateHostname(hostname)) {
+    return { success: false, output: '', error: 'Invalid hostname' };
+  }
   return executePowerShell({
     scriptFile: 'Install-Certificate.ps1',
     parameters: {
@@ -171,6 +249,13 @@ export async function bindIISCertificate(
   thumbprint: string,
   port: number = 443
 ): Promise<PowerShellResult> {
+  if (!validateHostname(hostname)) {
+    return { success: false, output: '', error: 'Invalid hostname' };
+  }
+  // Validate thumbprint (hex characters only)
+  if (!/^[a-fA-F0-9]+$/.test(thumbprint)) {
+    return { success: false, output: '', error: 'Invalid certificate thumbprint' };
+  }
   return executePowerShell({
     scriptFile: 'Bind-IISCertificate.ps1',
     parameters: {
@@ -182,3 +267,6 @@ export async function bindIISCertificate(
     timeout: 60000,
   });
 }
+
+// Export validators for use in controllers
+export { validateHostname, validateConfigString, sanitizePSString };

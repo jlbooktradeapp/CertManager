@@ -2,6 +2,15 @@ import ldap from 'ldapjs';
 import { getLdapConfig, getUserFilter, getUserSearchBase, getGroupFilter, getGroupSearchBase } from '../config/ldap';
 import { logger } from '../utils/logger';
 
+function getLdapTlsOptions(): { rejectUnauthorized: boolean } {
+  // In production, TLS certificate verification should be enabled
+  const rejectUnauthorized = process.env.LDAP_TLS_REJECT_UNAUTHORIZED !== 'false';
+  if (!rejectUnauthorized) {
+    logger.warn('LDAP TLS certificate verification is disabled. Enable it in production.');
+  }
+  return { rejectUnauthorized };
+}
+
 export interface LdapUserInfo {
   username: string;
   email: string;
@@ -19,7 +28,7 @@ export async function authenticateUser(
   return new Promise((resolve, reject) => {
     const client = ldap.createClient({
       url: config.url,
-      tlsOptions: { rejectUnauthorized: false },
+      tlsOptions: getLdapTlsOptions(),
     });
 
     client.on('error', (err) => {
@@ -81,7 +90,7 @@ export async function authenticateUser(
           // Try to bind as the user to verify password
           const userClient = ldap.createClient({
             url: config.url,
-            tlsOptions: { rejectUnauthorized: false },
+            tlsOptions: getLdapTlsOptions(),
           });
 
           userClient.bind(userEntry.distinguishedName, password, (userBindErr) => {
@@ -109,7 +118,7 @@ export async function getUserGroups(userDN: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const client = ldap.createClient({
       url: config.url,
-      tlsOptions: { rejectUnauthorized: false },
+      tlsOptions: getLdapTlsOptions(),
     });
 
     client.bind(config.bindDN, config.bindPassword, (bindErr) => {

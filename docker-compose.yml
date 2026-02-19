@@ -4,11 +4,13 @@ services:
     container_name: certmanager-mongo
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
     environment:
       - MONGO_INITDB_DATABASE=certmanager
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER:-certmgr_admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env}
 
 volumes:
   mongodb_data:

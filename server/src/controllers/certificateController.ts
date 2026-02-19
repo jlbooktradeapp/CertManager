@@ -27,7 +27,9 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
     }
 
     if (search) {
-      const searchRegex = new RegExp(search as string, 'i');
+      // Escape regex special characters to prevent ReDoS
+      const escapedSearch = (search as string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
       query.$or = [
         { commonName: searchRegex },
         { serialNumber: searchRegex },

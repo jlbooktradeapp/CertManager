@@ -5,6 +5,16 @@ import { NotificationSettings } from '../models/NotificationSettings';
 import { User } from '../models/User';
 import { logger } from '../utils/logger';
 
+// Escape HTML special characters to prevent HTML injection in emails
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 export interface NotificationResult {
   success: boolean;
   sent: number;
@@ -146,7 +156,7 @@ async function sendExpirationEmail(
   const subject = `[${severity}] Certificate Expiring in ${days} Days: ${cert.commonName}`;
 
   const deployedServers = cert.deployedTo
-    .map(d => d.serverName)
+    .map(d => escapeHtml(d.serverName))
     .join(', ') || 'Unknown';
 
   const html = `
@@ -159,15 +169,15 @@ async function sendExpirationEmail(
       <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Certificate</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${cert.commonName}</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.commonName)}</td>
         </tr>
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Serial Number</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${cert.serialNumber}</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.serialNumber)}</td>
         </tr>
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Expiration Date</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${cert.validTo.toLocaleDateString()}</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
         </tr>
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Days Remaining</td>
@@ -175,7 +185,7 @@ async function sendExpirationEmail(
         </tr>
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Issuing CA</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${cert.issuer.commonName}</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
         </tr>
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Deployed To</td>

@@ -38,6 +38,7 @@ interface NotificationSettings {
   thresholds: { days: number; enabled: boolean }[];
   recipients: { type: string; value: string }[];
   scheduleHour: number;
+  _smtpPasswordChanged?: boolean;
 }
 
 export default function Settings() {
@@ -80,7 +81,16 @@ export default function Settings() {
 
   const handleSave = () => {
     if (formData) {
-      updateMutation.mutate(formData);
+      const dataToSend = { ...formData };
+      // Only send password if it was actually changed by the user
+      if (!dataToSend._smtpPasswordChanged) {
+        dataToSend.smtpConfig = {
+          ...dataToSend.smtpConfig,
+          auth: { ...dataToSend.smtpConfig.auth, encryptedPassword: '********' },
+        };
+      }
+      delete dataToSend._smtpPasswordChanged;
+      updateMutation.mutate(dataToSend);
     }
   };
 
@@ -203,10 +213,12 @@ export default function Settings() {
                     size="small"
                     label="Password"
                     type="password"
-                    value={formData.smtpConfig.auth.encryptedPassword}
+                    placeholder={formData.smtpConfig.auth.encryptedPassword === '********' ? 'Leave blank to keep current' : ''}
+                    value={formData._smtpPasswordChanged ? formData.smtpConfig.auth.encryptedPassword : ''}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
+                        _smtpPasswordChanged: true,
                         smtpConfig: {
                           ...formData.smtpConfig,
                           auth: { ...formData.smtpConfig.auth, encryptedPassword: e.target.value },

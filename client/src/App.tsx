@@ -21,6 +21,34 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
 }
 
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isAdmin, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" />;
+  }
+
+  return isAdmin ? <>{children}</> : <Navigate to="/" />;
+}
+
+function OperatorRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isOperator, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" />;
+  }
+
+  return isOperator ? <>{children}</> : <Navigate to="/" />;
+}
+
 function App() {
   const { isAuthenticated } = useAuth();
 
@@ -44,9 +72,9 @@ function App() {
         <Route path="certificates/:id" element={<CertificateDetail />} />
         <Route path="ca" element={<CAList />} />
         <Route path="csr" element={<CSRList />} />
-        <Route path="csr/new" element={<CSRWizard />} />
+        <Route path="csr/new" element={<OperatorRoute><CSRWizard /></OperatorRoute>} />
         <Route path="servers" element={<ServerList />} />
-        <Route path="settings" element={<Settings />} />
+        <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
       </Route>
     </Routes>
   );

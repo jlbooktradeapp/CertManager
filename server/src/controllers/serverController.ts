@@ -113,12 +113,15 @@ export async function createServer(req: AuthenticatedRequest, res: Response): Pr
 export async function updateServer(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const updates = req.body;
 
-    delete updates._id;
-    delete updates.certificates;
-    delete updates.createdAt;
-    delete updates.updatedAt;
+    // Whitelist allowed fields to prevent mass assignment
+    const allowedFields = ['hostname', 'fqdn', 'ipAddress', 'operatingSystem', 'roles', 'domainJoined', 'domain', 'ou', 'status'] as const;
+    const updates: Record<string, unknown> = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
 
     const server = await Server.findByIdAndUpdate(
       id,

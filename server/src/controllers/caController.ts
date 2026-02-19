@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { CertificateAuthority } from '../models/CertificateAuthority';
 import { syncCA } from '../services/certificateService';
-import { executePowerShell } from '../services/powershellService';
+import { executePowerShell, validateConfigString, sanitizePSString } from '../services/powershellService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
@@ -87,12 +87,15 @@ export async function createCA(req: AuthenticatedRequest, res: Response): Promis
 export async function updateCA(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const updates = req.body;
 
-    // Remove fields that shouldn't be updated directly
-    delete updates._id;
-    delete updates.createdAt;
-    delete updates.updatedAt;
+    // Whitelist allowed fields to prevent mass assignment
+    const allowedFields = ['displayName', 'hostname', 'configString', 'syncEnabled', 'syncIntervalMinutes', 'status'] as const;
+    const updates: Record<string, unknown> = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
 
     const ca = await CertificateAuthority.findByIdAndUpdate(
       id,
@@ -185,10 +188,16 @@ export async function getCATemplates(req: Request, res: Response): Promise<void>
       return;
     }
 
+    // Validate configString before use in PowerShell
+    if (!validateConfigString(ca.configString)) {
+      res.status(400).json({ error: 'Invalid CA config string' });
+      return;
+    }
+
     // Otherwise fetch from CA
     const result = await executePowerShell({
       script: `
-        $templates = certutil -CATemplates -config "${ca.configString}" 2>$null |
+        $templates = certutil -CATemplates -config '${sanitizePSString(ca.configString)}' 2>$null |
           Where-Object { $_ -match '^\\s*[^:]+:' } |
           ForEach-Object {
             $parts = $_ -split ':'

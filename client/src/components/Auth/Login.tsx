@@ -30,7 +30,13 @@ export default function Login() {
       await login(username, password);
       navigate('/');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Login failed. Please try again.');
+      const serverError = err.response?.data?.error;
+      const safeErrors: Record<string, string> = {
+        'Invalid credentials': 'Invalid credentials',
+        'Username and password are required': 'Username and password are required',
+        'Too many login attempts. Please try again in 15 minutes.': 'Too many login attempts. Please try again in 15 minutes.',
+      };
+      setError(safeErrors[serverError] || 'Login failed. Please try again.');
     } finally {
       setIsLoading(false);
     }

@@ -16,6 +16,19 @@ export interface JwtPayload {
   exp: number;
 }
 
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('JWT_SECRET must be set to a secure value of at least 32 characters');
+  }
+  return secret;
+}
+
+function getJwtRefreshSecret(): string {
+  const secret = process.env.JWT_REFRESH_SECRET || (getJwtSecret() + '-refresh');
+  return secret;
+}
+
 export async function authenticate(
   req: AuthenticatedRequest,
   res: Response,
@@ -30,9 +43,15 @@ export async function authenticate(
     }
 
     const token = authHeader.substring(7);
-    const secret = process.env.JWT_SECRET || 'default-secret-change-me';
+    const secret = getJwtSecret();
 
-    const decoded = jwt.verify(token, secret) as JwtPayload;
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] }) as JwtPayload & { type?: string };
+
+    // Reject refresh tokens used as access tokens
+    if (decoded.type === 'refresh') {
+      res.status(401).json({ error: 'Invalid token type' });
+      return;
+    }
 
     const user = await User.findById(decoded.userId);
 
@@ -61,7 +80,7 @@ export async function authenticate(
 }
 
 export function generateToken(user: IUser): string {
-  const secret = process.env.JWT_SECRET || 'default-secret-change-me';
+  const secret = getJwtSecret();
   const expiresIn = process.env.JWT_EXPIRES_IN || '15m';
 
   const payload: Omit<JwtPayload, 'iat' | 'exp'> = {
@@ -70,15 +89,15 @@ export function generateToken(user: IUser): string {
     roles: user.roles,
   };
 
-  const options: SignOptions = { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] };
+  const options: SignOptions = { algorithm: 'HS256', expiresIn: expiresIn as jwt.SignOptions['expiresIn'] };
   return jwt.sign(payload, secret, options);
 }
 
 export function generateRefreshToken(user: IUser): string {
-  const secret = process.env.JWT_SECRET || 'default-secret-change-me';
+  const secret = getJwtRefreshSecret();
   const expiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 
-  const options: SignOptions = { expiresIn: expiresIn as jwt.SignOptions['expiresIn'] };
+  const options: SignOptions = { algorithm: 'HS256', expiresIn: expiresIn as jwt.SignOptions['expiresIn'] };
   return jwt.sign(
     { userId: user._id.toString(), type: 'refresh' },
     secret,
@@ -87,8 +106,8 @@ export function generateRefreshToken(user: IUser): string {
 }
 
 export function verifyRefreshToken(token: string): { userId: string } {
-  const secret = process.env.JWT_SECRET || 'default-secret-change-me';
-  const decoded = jwt.verify(token, secret) as { userId: string; type: string };
+  const secret = getJwtRefreshSecret();
+  const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] }) as { userId: string; type: string };
 
   if (decoded.type !== 'refresh') {
     throw new Error('Invalid refresh token');
