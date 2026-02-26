@@ -5,10 +5,10 @@ import {
   createServer,
   updateServer,
   deleteServer,
-  testServerConnectivity,
-  getServerCertificates,
-  deployCertificate,
-  bindCertificate,
+  // Phase 2: testServerConnectivity,
+  // Phase 2: getServerCertificates,
+  // Phase 2: deployCertificate,
+  // Phase 2: bindCertificate,
 } from '../controllers/serverController';
 import { authenticate } from '../middleware/auth';
 import { adminOnly, operatorOrAdmin, anyAuthenticated } from '../middleware/rbac';
@@ -35,15 +35,27 @@ router.put('/:id', adminOnly, validateObjectId('id'), updateServer);
 router.delete('/:id', adminOnly, validateObjectId('id'), deleteServer);
 
 // POST /api/servers/:id/test - Test connectivity
-router.post('/:id/test', operatorOrAdmin, validateObjectId('id'), testServerConnectivity);
+// DISABLED: Requires WinRM/PSRemoting - Phase 2 feature
+router.post('/:id/test', operatorOrAdmin, validateObjectId('id'), (_req, res) => {
+  res.status(503).json({ error: 'Server connectivity testing is not yet enabled. This feature requires WinRM configuration and will be available in a future release.' });
+});
 
 // GET /api/servers/:id/certificates - Get server certificates
-router.get('/:id/certificates', anyAuthenticated, validateObjectId('id'), getServerCertificates);
+// DISABLED: Requires PSRemoting to remote servers - Phase 2 feature
+router.get('/:id/certificates', anyAuthenticated, validateObjectId('id'), (_req, res) => {
+  res.status(503).json({ error: 'Remote certificate retrieval is not yet enabled. This feature will be available in a future release.' });
+});
 
 // POST /api/servers/:id/deploy - Deploy certificate
-router.post('/:id/deploy', operatorOrAdmin, validateObjectId('id'), deployCertificate);
+// DISABLED: Requires admin rights + WinRM on target servers - Phase 2 feature
+router.post('/:id/deploy', operatorOrAdmin, validateObjectId('id'), (_req, res) => {
+  res.status(503).json({ error: 'Certificate deployment is not yet enabled. This feature will be available in a future release.' });
+});
 
 // POST /api/servers/:id/bind - Bind certificate to site
-router.post('/:id/bind', operatorOrAdmin, validateObjectId('id'), bindCertificate);
+// DISABLED: Requires admin rights + WinRM on target servers - Phase 2 feature
+router.post('/:id/bind', operatorOrAdmin, validateObjectId('id'), (_req, res) => {
+  res.status(503).json({ error: 'Certificate binding is not yet enabled. This feature will be available in a future release.' });
+});
 
 export default router;
