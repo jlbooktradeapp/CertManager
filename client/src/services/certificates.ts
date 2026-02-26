@@ -49,3 +49,8 @@ export async function deleteCertificate(id: string) {
   const response = await api.delete(`/certificates/${id}`);
   return response.data;
 }
+
+export async function updateCertificate(id: string, data: { notificationRecipients: string[] }) {
+  const response = await api.put<Certificate>(`/certificates/${id}`, data);
+  return response.data;
+}

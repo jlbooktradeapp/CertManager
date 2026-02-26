@@ -42,6 +42,7 @@ export interface ICertificate extends Document {
   status: 'active' | 'expiring' | 'expired' | 'revoked';
   deployedTo: IDeployment[];
   notificationsSent: INotificationSent[];
+  notificationRecipients: string[];
   metadata: {
     discoveredAt: Date;
     lastSyncedAt: Date;
@@ -103,6 +104,7 @@ const CertificateSchema = new Schema<ICertificate>({
   },
   deployedTo: [DeploymentSchema],
   notificationsSent: [NotificationSentSchema],
+  notificationRecipients: [{ type: String }],
   metadata: {
     discoveredAt: { type: Date, default: Date.now },
     lastSyncedAt: { type: Date, default: Date.now },

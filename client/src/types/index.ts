@@ -51,6 +51,7 @@ export interface Certificate {
     lastSyncedAt: string;
     createdBy?: string;
   };
+  notificationRecipients?: string[];
 }
 
 export interface CertificateAuthority {

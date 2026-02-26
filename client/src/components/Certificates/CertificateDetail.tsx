@@ -19,15 +19,18 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  TextField,
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
   Delete as DeleteIcon,
   Computer as ServerIcon,
+  Email as EmailIcon,
+  Add as AddIcon,
 } from '@mui/icons-material';
 import { format, differenceInDays } from 'date-fns';
 import { useState } from 'react';
-import { getCertificate, deleteCertificate } from '../../services/certificates';
+import { getCertificate, deleteCertificate, updateCertificate } from '../../services/certificates';
 import { useAuth } from '../../context/AuthContext';
 
 const statusColors: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
@@ -43,6 +46,8 @@ export default function CertificateDetail() {
   const queryClient = useQueryClient();
   const { isOperator } = useAuth();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
 
   const { data: cert, isLoading, error } = useQuery({
     queryKey: ['certificate', id],
@@ -57,6 +62,39 @@ export default function CertificateDetail() {
       navigate('/certificates');
     },
   });
+
+  const updateRecipientsMutation = useMutation({
+    mutationFn: (recipients: string[]) => updateCertificate(id!, { notificationRecipients: recipients }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['certificate', id] });
+    },
+  });
+
+  const handleAddRecipient = () => {
+    const email = newEmail.trim();
+    if (!email) return;
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setEmailError('Invalid email address');
+      return;
+    }
+
+    const current = cert?.notificationRecipients || [];
+    if (current.includes(email)) {
+      setEmailError('Email already added');
+      return;
+    }
+
+    updateRecipientsMutation.mutate([...current, email]);
+    setNewEmail('');
+    setEmailError('');
+  };
+
+  const handleRemoveRecipient = (email: string) => {
+    const current = cert?.notificationRecipients || [];
+    updateRecipientsMutation.mutate(current.filter(e => e !== email));
+  };
 
   if (isLoading) {
     return (
@@ -266,6 +304,61 @@ export default function CertificateDetail() {
                 <Typography color="textSecondary">
                   This certificate is not deployed to any managed servers.
                 </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+        {/* Notification Recipients */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Notification Recipients
+              </Typography>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                These email addresses receive expiration warnings for this specific certificate, in addition to the global notification recipients configured in Settings.
+              </Typography>
+
+              {(cert.notificationRecipients && cert.notificationRecipients.length > 0) ? (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                  {cert.notificationRecipients.map((email) => (
+                    <Chip
+                      key={email}
+                      icon={<EmailIcon />}
+                      label={email}
+                      onDelete={isOperator ? () => handleRemoveRecipient(email) : undefined}
+                      variant="outlined"
+                    />
+                  ))}
+                </Box>
+              ) : (
+                <Typography color="textSecondary" sx={{ mb: 2 }}>
+                  No per-certificate recipients configured. Only global notification recipients will be notified.
+                </Typography>
+              )}
+
+              {isOperator && (
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                  <TextField
+                    size="small"
+                    label="Email address"
+                    type="email"
+                    value={newEmail}
+                    onChange={(e) => { setNewEmail(e.target.value); setEmailError(''); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddRecipient(); } }}
+                    error={!!emailError}
+                    helperText={emailError}
+                    sx={{ minWidth: 300 }}
+                  />
+                  <Button
+                    variant="outlined"
+                    startIcon={<AddIcon />}
+                    onClick={handleAddRecipient}
+                    disabled={!newEmail.trim() || updateRecipientsMutation.isPending}
+                  >
+                    Add
+                  </Button>
+                </Box>
               )}
             </CardContent>
           </Card>

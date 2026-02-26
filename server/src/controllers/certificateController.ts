@@ -147,6 +147,48 @@ export async function triggerSync(req: AuthenticatedRequest, res: Response): Pro
   }
 }
 
+export async function updateCertificate(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { notificationRecipients } = req.body;
+
+    const updates: Record<string, unknown> = {};
+
+    if (notificationRecipients !== undefined) {
+      if (!Array.isArray(notificationRecipients)) {
+        res.status(400).json({ error: 'notificationRecipients must be an array of email addresses' });
+        return;
+      }
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const invalid = notificationRecipients.filter((e: string) => !emailRegex.test(e));
+      if (invalid.length > 0) {
+        res.status(400).json({ error: `Invalid email address(es): ${invalid.join(', ')}` });
+        return;
+      }
+      updates.notificationRecipients = notificationRecipients;
+    }
+
+    const certificate = await Certificate.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!certificate) {
+      res.status(404).json({ error: 'Certificate not found' });
+      return;
+    }
+
+    logger.info(`Certificate ${certificate.commonName} updated by ${req.user?.username}`);
+
+    res.json(certificate);
+  } catch (error) {
+    logger.error('Update certificate error:', error);
+    res.status(500).json({ error: 'Failed to update certificate' });
+  }
+}
+
 export async function deleteCertificate(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;

@@ -5,6 +5,7 @@ import {
   getExpiringCertificates,
   getStats,
   triggerSync,
+  updateCertificate,
   deleteCertificate,
 } from '../controllers/certificateController';
 import { authenticate } from '../middleware/auth';
@@ -30,6 +31,9 @@ router.post('/sync', operatorOrAdmin, triggerSync);
 
 // GET /api/certificates/:id - Get certificate details
 router.get('/:id', anyAuthenticated, validateObjectId('id'), getCertificate);
+
+// PUT /api/certificates/:id - Update certificate (notification recipients, etc.)
+router.put('/:id', operatorOrAdmin, validateObjectId('id'), updateCertificate);
 
 // DELETE /api/certificates/:id - Remove certificate from tracking
 router.delete('/:id', operatorOrAdmin, validateObjectId('id'), deleteCertificate);

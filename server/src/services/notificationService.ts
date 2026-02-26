@@ -71,13 +71,19 @@ export async function sendExpirationNotifications(): Promise<NotificationResult>
         }
 
         try {
-          await sendExpirationEmail(cert, days, recipients, settings);
+          // Merge global recipients with per-certificate recipients
+          const allRecipients = [...new Set([
+            ...recipients,
+            ...(cert.notificationRecipients || []),
+          ])];
+
+          await sendExpirationEmail(cert, days, allRecipients, settings);
 
           // Record that notification was sent
           cert.notificationsSent.push({
             type: `${days}day` as any,
             sentAt: new Date(),
-            recipients,
+            recipients: allRecipients,
           });
           await cert.save();
 
