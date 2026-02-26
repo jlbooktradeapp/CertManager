@@ -4,6 +4,7 @@ import {
   getCertificate,
   getExpiringCertificates,
   getStats,
+  getTemplateNames,
   triggerSync,
   updateCertificate,
   deleteCertificate,
@@ -22,6 +23,9 @@ router.get('/', anyAuthenticated, listCertificates);
 
 // GET /api/certificates/stats - Get certificate statistics
 router.get('/stats', anyAuthenticated, getStats);
+
+// GET /api/certificates/templates - Get distinct template names
+router.get('/templates', anyAuthenticated, getTemplateNames);
 
 // GET /api/certificates/expiring - Get expiring certificates
 router.get('/expiring', anyAuthenticated, getExpiringCertificates);

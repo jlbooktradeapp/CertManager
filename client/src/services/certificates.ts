@@ -9,6 +9,8 @@ export interface CertificateFilters {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   maxDays?: number;
+  excludeTemplates?: string;
+  templateName?: string;
 }
 
 export async function getCertificates(filters: CertificateFilters = {}) {
@@ -20,6 +22,8 @@ export async function getCertificates(filters: CertificateFilters = {}) {
   if (filters.sortBy) params.set('sortBy', filters.sortBy);
   if (filters.sortOrder) params.set('sortOrder', filters.sortOrder);
   if (filters.maxDays) params.set('maxDays', String(filters.maxDays));
+  if (filters.excludeTemplates) params.set('excludeTemplates', filters.excludeTemplates);
+  if (filters.templateName) params.set('templateName', filters.templateName);
 
   const response = await api.get<PaginatedResponse<Certificate>>(`/certificates?${params}`);
   return response.data;
@@ -37,6 +41,11 @@ export async function getExpiringCertificates(days: number = 30) {
 
 export async function getCertificateStats() {
   const response = await api.get<CertificateStats>('/certificates/stats');
+  return response.data;
+}
+
+export async function getTemplateNames() {
+  const response = await api.get<string[]>('/certificates/templates');
   return response.data;
 }
 

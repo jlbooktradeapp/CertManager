@@ -10,11 +10,15 @@ import {
   Button,
   ToggleButton,
   ToggleButtonGroup,
+  FormControlLabel,
+  Switch,
+  Tooltip,
 } from '@mui/material';
 import { DataGrid, GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import { Search as SearchIcon, Sync as SyncIcon } from '@mui/icons-material';
 import { format, differenceInDays } from 'date-fns';
 import { getCertificates, triggerSync } from '../../services/certificates';
+import api from '../../services/api';
 import { Certificate } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
@@ -36,15 +40,26 @@ export default function CertificateList() {
   });
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [status, setStatus] = useState<string | null>(searchParams.get('status'));
+  const [showAll, setShowAll] = useState(false);
   const maxDays = searchParams.get('maxDays');
 
-  // Build a display label for active filters
   const filterLabel = maxDays
     ? `Expiring within ${maxDays} days`
     : null;
 
+  // Fetch excluded templates from settings
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await api.get('/settings/notifications');
+      return response.data;
+    },
+  });
+
+  const excludedTemplates = settings?.excludedTemplates || [];
+
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['certificates', paginationModel.page, paginationModel.pageSize, status, search, maxDays],
+    queryKey: ['certificates', paginationModel.page, paginationModel.pageSize, status, search, maxDays, showAll, excludedTemplates],
     queryFn: () =>
       getCertificates({
         page: paginationModel.page + 1,
@@ -54,6 +69,9 @@ export default function CertificateList() {
         sortBy: 'validTo',
         sortOrder: 'asc',
         maxDays: maxDays ? parseInt(maxDays, 10) : undefined,
+        excludeTemplates: !showAll && excludedTemplates.length > 0
+          ? excludedTemplates.join(',')
+          : undefined,
       }),
   });
 
@@ -65,7 +83,6 @@ export default function CertificateList() {
     } else {
       newParams.delete('status');
     }
-    // Clear maxDays when manually changing status filter
     newParams.delete('maxDays');
     setSearchParams(newParams);
   };
@@ -87,6 +104,13 @@ export default function CertificateList() {
       headerName: 'Common Name',
       flex: 1,
       minWidth: 200,
+    },
+    {
+      field: 'templateName',
+      headerName: 'Template',
+      width: 180,
+      renderCell: (params: GridRenderCellParams<Certificate>) =>
+        params.value || 'N/A',
     },
     {
       field: 'status',
@@ -131,13 +155,6 @@ export default function CertificateList() {
       headerName: 'Serial Number',
       width: 180,
     },
-    {
-      field: 'deployedTo',
-      headerName: 'Deployed To',
-      width: 150,
-      renderCell: (params: GridRenderCellParams<Certificate>) =>
-        params.row.deployedTo?.length ? `${params.row.deployedTo.length} server(s)` : 'Not deployed',
-    },
   ];
 
   return (
@@ -178,6 +195,23 @@ export default function CertificateList() {
           <ToggleButton value="expired">Expired</ToggleButton>
           <ToggleButton value="revoked">Revoked</ToggleButton>
         </ToggleButtonGroup>
+
+        <Tooltip title={showAll
+          ? 'Showing all certificate templates'
+          : `Hiding ${excludedTemplates.length} auto-enroll template(s). Configure in Settings.`
+        }>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={showAll}
+                onChange={(e) => setShowAll(e.target.checked)}
+                size="small"
+              />
+            }
+            label="Show all templates"
+            sx={{ ml: 1 }}
+          />
+        </Tooltip>
 
         {filterLabel && (
           <Chip

@@ -20,8 +20,9 @@ import {
   TableRow,
   CircularProgress,
 } from '@mui/material';
-import { Delete as DeleteIcon, Send as SendIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Send as SendIcon, Add as AddIcon, CalendarMonth as CalendarIcon } from '@mui/icons-material';
 import api from '../../services/api';
+import { getTemplateNames } from '../../services/certificates';
 
 interface NotificationSettings {
   enabled: boolean;
@@ -34,12 +35,23 @@ interface NotificationSettings {
   thresholds: { days: number; enabled: boolean }[];
   recipients: { type: string; value: string }[];
   scheduleHour: number;
+  excludedTemplates: string[];
+  calendarConfig: {
+    enabled: boolean;
+    method: 'ics' | 'graph' | 'both';
+    icsTargetEmail: string;
+    graphTenantId: string;
+    graphClientId: string;
+    graphClientSecret: string;
+    graphCalendarEmail: string;
+  };
 }
 
 export default function Settings() {
   const queryClient = useQueryClient();
   const [testEmail, setTestEmail] = useState('');
   const [newRecipient, setNewRecipient] = useState({ type: 'email', value: '' });
+  const [newTemplate, setNewTemplate] = useState('');
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['notificationSettings'],
@@ -47,6 +59,12 @@ export default function Settings() {
       const response = await api.get<NotificationSettings>('/settings/notifications');
       return response.data;
     },
+  });
+
+  // Fetch all known template names for autocomplete
+  const { data: allTemplates } = useQuery({
+    queryKey: ['templateNames'],
+    queryFn: getTemplateNames,
   });
 
   const [formData, setFormData] = useState<NotificationSettings | null>(null);
@@ -70,6 +88,13 @@ export default function Settings() {
   const testMutation = useMutation({
     mutationFn: async (email: string) => {
       const response = await api.post('/settings/notifications/test', { email });
+      return response.data;
+    },
+  });
+
+  const calendarSyncMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/settings/calendar/sync');
       return response.data;
     },
   });
@@ -104,6 +129,28 @@ export default function Settings() {
         t.days === days ? { ...t, enabled: !t.enabled } : t
       );
       setFormData({ ...formData, thresholds: newThresholds });
+    }
+  };
+
+  const handleAddExcludedTemplate = () => {
+    if (formData && newTemplate.trim()) {
+      const template = newTemplate.trim();
+      if (!formData.excludedTemplates.includes(template)) {
+        setFormData({
+          ...formData,
+          excludedTemplates: [...formData.excludedTemplates, template].sort(),
+        });
+      }
+      setNewTemplate('');
+    }
+  };
+
+  const handleRemoveExcludedTemplate = (template: string) => {
+    if (formData) {
+      setFormData({
+        ...formData,
+        excludedTemplates: formData.excludedTemplates.filter(t => t !== template),
+      });
     }
   };
 
@@ -329,6 +376,229 @@ export default function Settings() {
                   Add
                 </Button>
               </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Excluded Templates */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Hidden Certificate Templates
+              </Typography>
+              <Typography variant="body2" color="textSecondary" gutterBottom>
+                Certificates with these templates are hidden by default on the Certificates page.
+                Machine certificates, domain controller certs, and other auto-enrolled templates
+                are typically excluded so you can focus on web and application certificates.
+              </Typography>
+
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, my: 2 }}>
+                {(formData.excludedTemplates || []).map((template) => (
+                  <Chip
+                    key={template}
+                    label={template}
+                    onDelete={() => handleRemoveExcludedTemplate(template)}
+                    variant="outlined"
+                  />
+                ))}
+                {(formData.excludedTemplates || []).length === 0 && (
+                  <Typography variant="body2" color="textSecondary">
+                    No templates excluded — all certificates will be shown.
+                  </Typography>
+                )}
+              </Box>
+
+              <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                <TextField
+                  size="small"
+                  label="Template name"
+                  value={newTemplate}
+                  onChange={(e) => setNewTemplate(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddExcludedTemplate(); } }}
+                  placeholder="e.g., Machine"
+                  sx={{ minWidth: 250 }}
+                  select={!!(allTemplates && allTemplates.length > 0)}
+                  SelectProps={{ native: true }}
+                >
+                  {allTemplates && allTemplates.length > 0 && (
+                    <>
+                      <option value="">Select a template...</option>
+                      {allTemplates
+                        .filter(t => !(formData.excludedTemplates || []).includes(t))
+                        .map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))
+                      }
+                    </>
+                  )}
+                </TextField>
+                <Button
+                  variant="outlined"
+                  startIcon={<AddIcon />}
+                  onClick={handleAddExcludedTemplate}
+                  disabled={!newTemplate.trim()}
+                >
+                  Exclude
+                </Button>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Calendar Integration */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography variant="h6">
+                  Teams Calendar Integration
+                </Typography>
+                <Button
+                  variant="outlined"
+                  startIcon={<CalendarIcon />}
+                  onClick={() => calendarSyncMutation.mutate()}
+                  disabled={calendarSyncMutation.isPending || !formData.calendarConfig?.enabled}
+                >
+                  Sync Now
+                </Button>
+              </Box>
+
+              <Typography variant="body2" color="textSecondary" gutterBottom>
+                Create calendar events for web certificate expirations on your team's shared calendar.
+                Only certificates not in the excluded templates list will be synced.
+              </Typography>
+
+              {calendarSyncMutation.isSuccess && (
+                <Alert severity="success" sx={{ my: 1 }}>
+                  Calendar sync complete: {(calendarSyncMutation.data as any)?.icsCreated || 0} ICS events,{' '}
+                  {(calendarSyncMutation.data as any)?.graphCreated || 0} Graph events
+                  {(calendarSyncMutation.data as any)?.errors?.length > 0 &&
+                    ` (${(calendarSyncMutation.data as any).errors.length} errors)`}
+                </Alert>
+              )}
+              {calendarSyncMutation.isError && (
+                <Alert severity="error" sx={{ my: 1 }}>Failed to sync calendar</Alert>
+              )}
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={formData.calendarConfig?.enabled || false}
+                    onChange={(e) => setFormData({
+                      ...formData,
+                      calendarConfig: { ...formData.calendarConfig, enabled: e.target.checked },
+                    })}
+                  />
+                }
+                label="Enable calendar integration"
+                sx={{ mt: 1 }}
+              />
+
+              {formData.calendarConfig?.enabled && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" gutterBottom>Delivery Method</Typography>
+                  <TextField
+                    select
+                    size="small"
+                    value={formData.calendarConfig?.method || 'ics'}
+                    onChange={(e) => setFormData({
+                      ...formData,
+                      calendarConfig: { ...formData.calendarConfig, method: e.target.value as any },
+                    })}
+                    SelectProps={{ native: true }}
+                    sx={{ mb: 2, minWidth: 250 }}
+                  >
+                    <option value="ics">ICS Calendar Invites via SMTP</option>
+                    <option value="graph">Microsoft Graph API</option>
+                    <option value="both">Both Methods</option>
+                  </TextField>
+
+                  {(formData.calendarConfig?.method === 'ics' || formData.calendarConfig?.method === 'both') && (
+                    <Box sx={{ mb: 3 }}>
+                      <Typography variant="subtitle2" gutterBottom>ICS via SMTP</Typography>
+                      <Typography variant="caption" color="textSecondary" display="block" sx={{ mb: 1 }}>
+                        Sends calendar invite emails to a shared mailbox. Events appear on the mailbox calendar automatically.
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label="Target Calendar Email (shared mailbox)"
+                        value={formData.calendarConfig?.icsTargetEmail || ''}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          calendarConfig: { ...formData.calendarConfig, icsTargetEmail: e.target.value },
+                        })}
+                        placeholder="certsteam@yourdomain.com"
+                      />
+                    </Box>
+                  )}
+
+                  {(formData.calendarConfig?.method === 'graph' || formData.calendarConfig?.method === 'both') && (
+                    <Box>
+                      <Typography variant="subtitle2" gutterBottom>Microsoft Graph API</Typography>
+                      <Typography variant="caption" color="textSecondary" display="block" sx={{ mb: 1 }}>
+                        Requires an Azure AD app registration with Calendars.ReadWrite permission (Application type).
+                      </Typography>
+                      <Grid container spacing={2}>
+                        <Grid item xs={12}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Tenant ID"
+                            value={formData.calendarConfig?.graphTenantId || ''}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              calendarConfig: { ...formData.calendarConfig, graphTenantId: e.target.value },
+                            })}
+                          />
+                        </Grid>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Client ID"
+                            value={formData.calendarConfig?.graphClientId || ''}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              calendarConfig: { ...formData.calendarConfig, graphClientId: e.target.value },
+                            })}
+                          />
+                        </Grid>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Client Secret"
+                            type="password"
+                            value={formData.calendarConfig?.graphClientSecret || ''}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              calendarConfig: { ...formData.calendarConfig, graphClientSecret: e.target.value },
+                            })}
+                          />
+                        </Grid>
+                        <Grid item xs={12}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Calendar User Email"
+                            value={formData.calendarConfig?.graphCalendarEmail || ''}
+                            onChange={(e) => setFormData({
+                              ...formData,
+                              calendarConfig: { ...formData.calendarConfig, graphCalendarEmail: e.target.value },
+                            })}
+                            placeholder="certsteam@yourdomain.com"
+                            helperText="The user/shared mailbox whose calendar events will be created on"
+                          />
+                        </Grid>
+                      </Grid>
+                    </Box>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         </Grid>

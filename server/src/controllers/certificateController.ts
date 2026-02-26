@@ -14,6 +14,8 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
       sortBy = 'validTo',
       sortOrder = 'asc',
       maxDays,
+      excludeTemplates,
+      templateName,
     } = req.query;
 
     const pageNum = parseInt(page as string, 10);
@@ -37,6 +39,14 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
       if (!status) {
         query.status = { $nin: ['expired', 'revoked'] };
       }
+    }
+
+    // Template filtering
+    if (templateName) {
+      query.templateName = templateName;
+    } else if (excludeTemplates) {
+      const templates = (excludeTemplates as string).split(',').map(t => t.trim());
+      query.templateName = { $nin: templates };
     }
 
     if (search) {
@@ -122,9 +132,24 @@ export async function getExpiringCertificates(req: Request, res: Response): Prom
   }
 }
 
+export async function getTemplateNames(_req: Request, res: Response): Promise<void> {
+  try {
+    const templates = await Certificate.distinct('templateName');
+    res.json(templates.filter(Boolean).sort());
+  } catch (error) {
+    logger.error('Get template names error:', error);
+    res.status(500).json({ error: 'Failed to get template names' });
+  }
+}
+
 export async function getStats(req: Request, res: Response): Promise<void> {
   try {
-    const stats = await getCertificateStats();
+    // Load excluded templates from settings so dashboard counts match the filtered view
+    const { NotificationSettings } = await import('../models/NotificationSettings');
+    const settings = await NotificationSettings.findOne();
+    const excludeTemplates = settings?.excludedTemplates || [];
+
+    const stats = await getCertificateStats(excludeTemplates);
     res.json(stats);
   } catch (error) {
     logger.error('Get stats error:', error);

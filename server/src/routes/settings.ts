@@ -3,6 +3,7 @@ import {
   getNotificationSettings,
   updateNotificationSettings,
   testNotificationEmail,
+  syncCalendar,
   getSyncSettings,
   updateSyncSettings,
 } from '../controllers/settingsController';
@@ -22,6 +23,9 @@ router.put('/notifications', adminOnly, updateNotificationSettings);
 
 // POST /api/settings/notifications/test - Send test email
 router.post('/notifications/test', adminOnly, testNotificationEmail);
+
+// POST /api/settings/calendar/sync - Sync certificates to Teams calendar
+router.post('/calendar/sync', adminOnly, syncCalendar);
 
 // GET /api/settings/sync - Get sync settings
 router.get('/sync', anyAuthenticated, getSyncSettings);

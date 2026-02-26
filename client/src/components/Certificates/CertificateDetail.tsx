@@ -11,9 +11,6 @@ import {
   CircularProgress,
   Alert,
   Divider,
-  List,
-  ListItem,
-  ListItemText,
   IconButton,
   Dialog,
   DialogTitle,
@@ -26,7 +23,6 @@ import {
 import {
   ArrowBack as BackIcon,
   Delete as DeleteIcon,
-  Computer as ServerIcon,
   Email as EmailIcon,
   Add as AddIcon,
   Apps as AppsIcon,
@@ -344,32 +340,7 @@ export default function CertificateDetail() {
           </Card>
         </Grid>
 
-        {/* Deployments */}
-        <Grid item xs={12}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Deployments</Typography>
-              {cert.deployedTo.length > 0 ? (
-                <List>
-                  {cert.deployedTo.map((deployment, index) => (
-                    <ListItem key={index}>
-                      <ServerIcon sx={{ mr: 2, color: 'text.secondary' }} />
-                      <ListItemText
-                        primary={deployment.serverName}
-                        secondary={deployment.binding ? `${deployment.binding.type} - ${deployment.binding.siteName || ''} :${deployment.binding.port || 443}` : 'Installed'}
-                      />
-                      <Typography variant="caption" color="textSecondary">
-                        {format(new Date(deployment.deployedAt), 'PPp')}
-                      </Typography>
-                    </ListItem>
-                  ))}
-                </List>
-              ) : (
-                <Typography color="textSecondary">This certificate is not deployed to any managed servers.</Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
+        {/* Deployments - Hidden until Phase 2 (WinRM/gMSA) */}
 
         {/* Notification Recipients */}
         <Grid item xs={12}>

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { NotificationSettings } from '../models/NotificationSettings';
 import { sendTestEmail } from '../services/notificationService';
+import { syncCertificatesToCalendar } from '../services/calendarService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
@@ -39,6 +40,9 @@ export async function getNotificationSettings(req: Request, res: Response): Prom
     const safeSettings = settings.toObject();
     if (safeSettings.smtpConfig.auth) {
       safeSettings.smtpConfig.auth.encryptedPassword = safeSettings.smtpConfig.auth.encryptedPassword ? '********' : '';
+    }
+    if (safeSettings.calendarConfig?.graphClientSecret) {
+      safeSettings.calendarConfig.graphClientSecret = '********';
     }
 
     res.json(safeSettings);
@@ -86,6 +90,23 @@ export async function updateNotificationSettings(req: AuthenticatedRequest, res:
       settings.scheduleHour = Math.max(0, Math.min(23, updates.scheduleHour));
     }
 
+    if (Array.isArray(updates.excludedTemplates)) {
+      settings.excludedTemplates = updates.excludedTemplates;
+    }
+
+    if (updates.calendarConfig) {
+      const cc = updates.calendarConfig;
+      if (typeof cc.enabled === 'boolean') settings.calendarConfig.enabled = cc.enabled;
+      if (cc.method) settings.calendarConfig.method = cc.method;
+      if (cc.icsTargetEmail !== undefined) settings.calendarConfig.icsTargetEmail = cc.icsTargetEmail;
+      if (cc.graphTenantId !== undefined) settings.calendarConfig.graphTenantId = cc.graphTenantId;
+      if (cc.graphClientId !== undefined) settings.calendarConfig.graphClientId = cc.graphClientId;
+      if (cc.graphClientSecret && cc.graphClientSecret !== '********') {
+        settings.calendarConfig.graphClientSecret = cc.graphClientSecret;
+      }
+      if (cc.graphCalendarEmail !== undefined) settings.calendarConfig.graphCalendarEmail = cc.graphCalendarEmail;
+    }
+
     await settings.save();
 
     logger.info(`Notification settings updated by ${req.user?.username}`);
@@ -124,6 +145,17 @@ export async function testNotificationEmail(req: AuthenticatedRequest, res: Resp
   } catch (error) {
     logger.error('Test email error:', error);
     res.status(500).json({ error: 'Failed to send test email' });
+  }
+}
+
+export async function syncCalendar(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    logger.info(`Calendar sync triggered by ${req.user?.username}`);
+    const result = await syncCertificatesToCalendar();
+    res.json(result);
+  } catch (error) {
+    logger.error('Calendar sync error:', error);
+    res.status(500).json({ error: 'Failed to sync calendar' });
   }
 }
 

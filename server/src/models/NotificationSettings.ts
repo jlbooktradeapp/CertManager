@@ -25,6 +25,16 @@ export interface INotificationSettings extends Document {
   thresholds: IThreshold[];
   recipients: IRecipient[];
   scheduleHour: number;
+  excludedTemplates: string[];
+  calendarConfig: {
+    enabled: boolean;
+    method: 'ics' | 'graph' | 'both';
+    icsTargetEmail: string;
+    graphTenantId: string;
+    graphClientId: string;
+    graphClientSecret: string;
+    graphCalendarEmail: string;
+  };
 }
 
 const ThresholdSchema = new Schema<IThreshold>({
@@ -66,6 +76,31 @@ const NotificationSettingsSchema = new Schema<INotificationSettings>({
   },
   recipients: [RecipientSchema],
   scheduleHour: { type: Number, default: 8, min: 0, max: 23 },
+  excludedTemplates: {
+    type: [String],
+    default: [
+      'Machine',
+      'DomainController',
+      'DomainControllerAuthentication',
+      'KerberosAuthentication',
+      'Computer',
+      'DirectoryEmailReplication',
+      'Workstation',
+      'EFS',
+      'EFSRecovery',
+      'CEPEncryption',
+      'CAExchange',
+    ],
+  },
+  calendarConfig: {
+    enabled: { type: Boolean, default: false },
+    method: { type: String, enum: ['ics', 'graph', 'both'], default: 'ics' },
+    icsTargetEmail: { type: String, default: '' },
+    graphTenantId: { type: String, default: '' },
+    graphClientId: { type: String, default: '' },
+    graphClientSecret: { type: String, default: '' },
+    graphCalendarEmail: { type: String, default: '' },
+  },
 }, {
   timestamps: true,
 });

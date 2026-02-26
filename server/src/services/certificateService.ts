@@ -13,10 +13,16 @@ export interface CertificateStats {
   expiringIn7Days: number;
 }
 
-export async function getCertificateStats(): Promise<CertificateStats> {
+export async function getCertificateStats(excludeTemplates?: string[]): Promise<CertificateStats> {
   const now = new Date();
   const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+  // Base filter to exclude hidden templates
+  const base: Record<string, any> = {};
+  if (excludeTemplates && excludeTemplates.length > 0) {
+    base.templateName = { $nin: excludeTemplates };
+  }
 
   const [
     total,
@@ -27,16 +33,18 @@ export async function getCertificateStats(): Promise<CertificateStats> {
     expiringIn30Days,
     expiringIn7Days,
   ] = await Promise.all([
-    Certificate.countDocuments(),
-    Certificate.countDocuments({ status: 'active' }),
-    Certificate.countDocuments({ status: 'expiring' }),
-    Certificate.countDocuments({ status: 'expired' }),
-    Certificate.countDocuments({ status: 'revoked' }),
+    Certificate.countDocuments({ ...base }),
+    Certificate.countDocuments({ ...base, status: 'active' }),
+    Certificate.countDocuments({ ...base, status: 'expiring' }),
+    Certificate.countDocuments({ ...base, status: 'expired' }),
+    Certificate.countDocuments({ ...base, status: 'revoked' }),
     Certificate.countDocuments({
+      ...base,
       status: { $nin: ['expired', 'revoked'] },
       validTo: { $gte: now, $lte: in30Days },
     }),
     Certificate.countDocuments({
+      ...base,
       status: { $nin: ['expired', 'revoked'] },
       validTo: { $gte: now, $lte: in7Days },
     }),
