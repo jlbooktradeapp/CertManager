@@ -20,26 +20,52 @@ import {
   CircularProgress,
   Alert,
   IconButton,
+  Switch,
+  FormControlLabel,
 } from '@mui/material';
 import {
   Add as AddIcon,
   Sync as SyncIcon,
   Delete as DeleteIcon,
+  Edit as EditIcon,
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { CertificateAuthority } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
+const emptyForm = {
+  name: '',
+  displayName: '',
+  type: 'issuing' as const,
+  hostname: '',
+  configString: '',
+};
+
+interface EditFormData {
+  displayName: string;
+  hostname: string;
+  configString: string;
+  syncEnabled: boolean;
+  syncIntervalMinutes: number;
+}
+
 export default function CAList() {
   const queryClient = useQueryClient();
   const { isAdmin, isOperator } = useAuth();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
+
+  // Add dialog state
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [formData, setFormData] = useState(emptyForm);
+
+  // Edit dialog state
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingCA, setEditingCA] = useState<CertificateAuthority | null>(null);
+  const [editFormData, setEditFormData] = useState<EditFormData>({
     displayName: '',
-    type: 'issuing' as const,
     hostname: '',
     configString: '',
+    syncEnabled: true,
+    syncIntervalMinutes: 60,
   });
 
   const { data: cas, isLoading, error } = useQuery({
@@ -57,8 +83,20 @@ export default function CAList() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['certificateAuthorities'] });
-      setDialogOpen(false);
-      setFormData({ name: '', displayName: '', type: 'issuing', hostname: '', configString: '' });
+      setAddDialogOpen(false);
+      setFormData(emptyForm);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: EditFormData }) => {
+      const response = await api.put(`/ca/${id}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['certificateAuthorities'] });
+      setEditDialogOpen(false);
+      setEditingCA(null);
     },
   });
 
@@ -82,9 +120,28 @@ export default function CAList() {
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     createMutation.mutate(formData);
+  };
+
+  const handleEditOpen = (ca: CertificateAuthority) => {
+    setEditingCA(ca);
+    setEditFormData({
+      displayName: ca.displayName,
+      hostname: ca.hostname,
+      configString: ca.configString,
+      syncEnabled: ca.syncEnabled,
+      syncIntervalMinutes: ca.syncIntervalMinutes,
+    });
+    setEditDialogOpen(true);
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingCA) {
+      updateMutation.mutate({ id: editingCA._id, data: editFormData });
+    }
   };
 
   if (isLoading) {
@@ -110,7 +167,7 @@ export default function CAList() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4">Certificate Authorities</Typography>
         {isAdmin && (
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialogOpen(true)}>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddDialogOpen(true)}>
             Add CA
           </Button>
         )}
@@ -171,6 +228,15 @@ export default function CAList() {
                   {isAdmin && (
                     <IconButton
                       size="small"
+                      color="primary"
+                      onClick={() => handleEditOpen(ca)}
+                    >
+                      <EditIcon />
+                    </IconButton>
+                  )}
+                  {isAdmin && (
+                    <IconButton
+                      size="small"
                       color="error"
                       onClick={() => {
                         if (confirm(`Delete CA "${ca.displayName}"?`)) {
@@ -197,8 +263,8 @@ export default function CAList() {
       </Grid>
 
       {/* Add CA Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <form onSubmit={handleSubmit}>
+      <Dialog open={addDialogOpen} onClose={() => setAddDialogOpen(false)} maxWidth="sm" fullWidth>
+        <form onSubmit={handleAddSubmit}>
           <DialogTitle>Add Certificate Authority</DialogTitle>
           <DialogContent>
             <TextField
@@ -250,9 +316,73 @@ export default function CAList() {
             />
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => setAddDialogOpen(false)}>Cancel</Button>
             <Button type="submit" variant="contained" disabled={createMutation.isPending}>
               Add CA
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* Edit CA Dialog */}
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
+        <form onSubmit={handleEditSubmit}>
+          <DialogTitle>Edit Certificate Authority: {editingCA?.name}</DialogTitle>
+          <DialogContent>
+            <TextField
+              fullWidth
+              label="Display Name"
+              value={editFormData.displayName}
+              onChange={(e) => setEditFormData({ ...editFormData, displayName: e.target.value })}
+              margin="normal"
+              required
+            />
+            <TextField
+              fullWidth
+              label="Hostname"
+              value={editFormData.hostname}
+              onChange={(e) => setEditFormData({ ...editFormData, hostname: e.target.value })}
+              margin="normal"
+              required
+              placeholder="ca-server.domain.local"
+            />
+            <TextField
+              fullWidth
+              label="Config String"
+              value={editFormData.configString}
+              onChange={(e) => setEditFormData({ ...editFormData, configString: e.target.value })}
+              margin="normal"
+              required
+              placeholder="ca-server.domain.local\CA-Name"
+              helperText="Format: hostname\CA-Name"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editFormData.syncEnabled}
+                  onChange={(e) => setEditFormData({ ...editFormData, syncEnabled: e.target.checked })}
+                />
+              }
+              label="Auto-sync enabled"
+              sx={{ mt: 1, display: 'block' }}
+            />
+            {editFormData.syncEnabled && (
+              <TextField
+                fullWidth
+                label="Sync Interval (minutes)"
+                type="number"
+                value={editFormData.syncIntervalMinutes}
+                onChange={(e) => setEditFormData({ ...editFormData, syncIntervalMinutes: parseInt(e.target.value) || 60 })}
+                margin="normal"
+                inputProps={{ min: 5, max: 1440 }}
+                helperText="How often to automatically sync certificates (5-1440 minutes)"
+              />
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="contained" disabled={updateMutation.isPending}>
+              Save Changes
             </Button>
           </DialogActions>
         </form>
