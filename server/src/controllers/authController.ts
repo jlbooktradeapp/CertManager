@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { authenticateUser } from '../services/ldapService';
+import { authenticateUser, LdapUserInfo } from '../services/ldapService';
 import { User, UserRole } from '../models/User';
 import { RefreshToken } from '../models/RefreshToken';
 import { generateToken, generateRefreshToken, verifyRefreshToken, AuthenticatedRequest } from '../middleware/auth';
@@ -21,8 +21,25 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Authenticate against AD
-    const ldapUser = await authenticateUser(username, password);
+    let ldapUser: LdapUserInfo | null = null;
+
+    // Check for local test account first
+    const localUser = process.env.LOCAL_ADMIN_USER;
+    const localPass = process.env.LOCAL_ADMIN_PASSWORD;
+
+    if (localUser && localPass && username === localUser && password === localPass) {
+      logger.info(`Local test account login: ${username}`);
+      ldapUser = {
+        username: localUser,
+        email: process.env.LOCAL_ADMIN_EMAIL || 'admin@test.local',
+        displayName: process.env.LOCAL_ADMIN_DISPLAYNAME || 'Local Admin',
+        distinguishedName: `CN=${localUser},OU=Local,DC=test,DC=local`,
+        memberOf: ['CN=CertManager-Admins,OU=Groups,DC=test,DC=local'],
+      };
+    } else {
+      // Authenticate against AD
+      ldapUser = await authenticateUser(username, password);
+    }
 
     if (!ldapUser) {
       res.status(401).json({ error: 'Invalid credentials' });

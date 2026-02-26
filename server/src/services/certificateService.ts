@@ -111,10 +111,22 @@ export async function syncAllCAs(): Promise<void> {
   await updateCertificateStatuses();
 }
 
+// Replace the syncCA function (around line 114) in certificateService.ts with this:
+
 export async function syncCA(ca: ICertificateAuthority): Promise<number> {
   logger.info(`Syncing certificates from CA: ${ca.name}`);
 
-  const result = await getCAIssuedCertificates(ca.configString);
+  // Use last sync date for incremental sync if available
+  let sinceDate: string | undefined;
+  if (ca.lastSyncedAt) {
+    // Format date for certutil - pull anything not yet expired as of last sync
+    sinceDate = ca.lastSyncedAt.toLocaleDateString('en-US');
+    logger.info(`Incremental sync for ${ca.name} since ${sinceDate}`);
+  } else {
+    logger.info(`Full sync for ${ca.name} (first time)`);
+  }
+
+  const result = await getCAIssuedCertificates(ca.configString, sinceDate);
 
   if (!result.success) {
     throw new Error(`Failed to get certificates from CA: ${result.error}`);
@@ -130,6 +142,8 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
     logger.error('Failed to parse CA output:', result.output);
     throw new Error('Failed to parse certificate data from CA');
   }
+
+  logger.info(`Processing ${certificates.length} certificates from ${ca.name}`);
 
   let syncedCount = 0;
 

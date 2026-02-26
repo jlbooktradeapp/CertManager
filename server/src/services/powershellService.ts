@@ -192,14 +192,20 @@ export async function getRemoteCertificates(hostname: string): Promise<PowerShel
   });
 }
 
-export async function getCAIssuedCertificates(configString: string): Promise<PowerShellResult> {
+export async function getCAIssuedCertificates(configString: string, sinceDate?: string): Promise<PowerShellResult> {
   if (!validateConfigString(configString)) {
     return { success: false, output: '', error: 'Invalid CA config string' };
   }
+
+  const parameters: Record<string, string> = { ConfigString: configString };
+  if (sinceDate) {
+    parameters.SinceDate = sinceDate;
+  }
+
   return executePowerShell({
     scriptFile: 'Get-IssuedCertificates.ps1',
-    parameters: { ConfigString: configString },
-    timeout: 120000,
+    parameters,
+    timeout: 600000, // 10 minutes for large CAs
   });
 }
 
