@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { createMailTransporter, getMailConfig } from '../config/mail';
 import { Certificate, ICertificate } from '../models/Certificate';
+import { Application } from '../models/Application';
 import { NotificationSettings } from '../models/NotificationSettings';
 import { User } from '../models/User';
 import { logger } from '../utils/logger';
@@ -71,11 +72,26 @@ export async function sendExpirationNotifications(): Promise<NotificationResult>
         }
 
         try {
-          // Merge global recipients with per-certificate recipients
-          const allRecipients = [...new Set([
+          // Merge global + per-certificate + application owner/vendor recipients
+          const mergedRecipients = [
             ...recipients,
             ...(cert.notificationRecipients || []),
-          ])];
+          ];
+
+          // Add application owner and vendor contact emails
+          if (cert.applicationId) {
+            const app = await Application.findById(cert.applicationId);
+            if (app) {
+              for (const owner of app.owners) {
+                if (owner.email) mergedRecipients.push(owner.email);
+              }
+              if (app.vendor?.contactEmail) {
+                mergedRecipients.push(app.vendor.contactEmail);
+              }
+            }
+          }
+
+          const allRecipients = [...new Set(mergedRecipients)];
 
           await sendExpirationEmail(cert, days, allRecipients, settings);
 

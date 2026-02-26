@@ -43,6 +43,7 @@ export interface ICertificate extends Document {
   deployedTo: IDeployment[];
   notificationsSent: INotificationSent[];
   notificationRecipients: string[];
+  applicationId?: mongoose.Types.ObjectId;
   metadata: {
     discoveredAt: Date;
     lastSyncedAt: Date;
@@ -105,6 +106,7 @@ const CertificateSchema = new Schema<ICertificate>({
   deployedTo: [DeploymentSchema],
   notificationsSent: [NotificationSentSchema],
   notificationRecipients: [{ type: String }],
+  applicationId: { type: Schema.Types.ObjectId, ref: 'Application', index: true },
   metadata: {
     discoveredAt: { type: Date, default: Date.now },
     lastSyncedAt: { type: Date, default: Date.now },

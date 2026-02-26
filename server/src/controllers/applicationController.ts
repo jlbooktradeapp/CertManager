@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Application } from '../models/Application';
+import { Certificate } from '../models/Certificate';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
@@ -29,12 +30,25 @@ export async function listApplications(req: Request, res: Response): Promise<voi
         .sort({ name: 1 })
         .skip(skip)
         .limit(limitNum)
-        .populate('certificates', 'commonName status validTo'),
+        .lean(),
       Application.countDocuments(query),
     ]);
 
+    // Attach certificate counts from Certificate collection
+    const appIds = applications.map(a => a._id);
+    const certCounts = await Certificate.aggregate([
+      { $match: { applicationId: { $in: appIds } } },
+      { $group: { _id: '$applicationId', count: { $sum: 1 } } },
+    ]);
+    const countMap = new Map(certCounts.map((c: any) => [c._id.toString(), c.count]));
+
+    const enriched = applications.map(app => ({
+      ...app,
+      certificateCount: countMap.get(app._id.toString()) || 0,
+    }));
+
     res.json({
-      data: applications,
+      data: enriched,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -52,15 +66,20 @@ export async function getApplication(req: Request, res: Response): Promise<void>
   try {
     const { id } = req.params;
 
-    const application = await Application.findById(id)
-      .populate('certificates');
+    const application = await Application.findById(id).lean();
 
     if (!application) {
       res.status(404).json({ error: 'Application not found' });
       return;
     }
 
-    res.json(application);
+    // Query certificates assigned to this application
+    const certificates = await Certificate.find({ applicationId: id })
+      .select('commonName serialNumber thumbprint status validFrom validTo templateName issuer')
+      .sort({ validTo: 1 })
+      .populate('issuer.caId', 'name displayName');
+
+    res.json({ ...application, certificates });
   } catch (error) {
     logger.error('Get application error:', error);
     res.status(500).json({ error: 'Failed to get application' });
@@ -143,6 +162,12 @@ export async function deleteApplication(req: AuthenticatedRequest, res: Response
     }
 
     await application.deleteOne();
+
+    // Unassign any certificates linked to this application
+    await Certificate.updateMany(
+      { applicationId: id },
+      { $set: { applicationId: null } }
+    );
 
     logger.info(`Application ${application.name} deleted by ${req.user?.username}`);
 

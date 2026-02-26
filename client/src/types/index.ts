@@ -52,6 +52,7 @@ export interface Certificate {
     createdBy?: string;
   };
   notificationRecipients?: string[];
+  applicationId?: string | Application;
 }
 
 export interface CertificateAuthority {
@@ -116,6 +117,7 @@ export interface Application {
   };
   status: 'active' | 'inactive' | 'retired';
   certificates: Certificate[];
+  certificateCount?: number;
   createdAt: string;
   updatedAt: string;
 }

@@ -11,6 +11,7 @@ import CSRWizard from './components/CSR/CSRWizard';
 import ServerList from './components/Servers/ServerList';
 import Settings from './components/Settings/Settings';
 import ApplicationList from './components/Applications/ApplicationList';
+import ApplicationDetail from './components/Applications/ApplicationDetail';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -76,6 +77,7 @@ function App() {
         <Route path="csr/new" element={<OperatorRoute><CSRWizard /></OperatorRoute>} />
         <Route path="servers" element={<ServerList />} />
         <Route path="applications" element={<ApplicationList />} />
+        <Route path="applications/:id" element={<ApplicationDetail />} />
         <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
       </Route>
     </Routes>

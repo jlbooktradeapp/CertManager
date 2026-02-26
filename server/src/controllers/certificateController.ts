@@ -85,7 +85,8 @@ export async function getCertificate(req: Request, res: Response): Promise<void>
 
     const certificate = await Certificate.findById(id)
       .populate('issuer.caId', 'name displayName hostname')
-      .populate('deployedTo.serverId', 'hostname fqdn');
+      .populate('deployedTo.serverId', 'hostname fqdn')
+      .populate('applicationId', 'name description owners vendor status');
 
     if (!certificate) {
       res.status(404).json({ error: 'Certificate not found' });
@@ -150,7 +151,7 @@ export async function triggerSync(req: AuthenticatedRequest, res: Response): Pro
 export async function updateCertificate(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { notificationRecipients } = req.body;
+    const { notificationRecipients, applicationId } = req.body;
 
     const updates: Record<string, unknown> = {};
 
@@ -159,7 +160,6 @@ export async function updateCertificate(req: AuthenticatedRequest, res: Response
         res.status(400).json({ error: 'notificationRecipients must be an array of email addresses' });
         return;
       }
-      // Basic email validation
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const invalid = notificationRecipients.filter((e: string) => !emailRegex.test(e));
       if (invalid.length > 0) {
@@ -169,11 +169,25 @@ export async function updateCertificate(req: AuthenticatedRequest, res: Response
       updates.notificationRecipients = notificationRecipients;
     }
 
+    if (applicationId !== undefined) {
+      if (applicationId === null) {
+        updates.applicationId = null;
+      } else {
+        const { Application } = await import('../models/Application');
+        const app = await Application.findById(applicationId);
+        if (!app) {
+          res.status(400).json({ error: 'Application not found' });
+          return;
+        }
+        updates.applicationId = applicationId;
+      }
+    }
+
     const certificate = await Certificate.findByIdAndUpdate(
       id,
       { $set: updates },
       { new: true, runValidators: true }
-    );
+    ).populate('applicationId', 'name description owners vendor status');
 
     if (!certificate) {
       res.status(404).json({ error: 'Certificate not found' });

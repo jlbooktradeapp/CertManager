@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
@@ -61,6 +62,7 @@ export default function ApplicationList() {
   const queryClient = useQueryClient();
   const { isAdmin } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -423,7 +425,9 @@ export default function ApplicationList() {
             </TableHead>
             <TableBody>
               {data.data.map((app) => (
-                <TableRow key={app._id} hover>
+                <TableRow key={app._id} hover sx={{ cursor: 'pointer' }}
+                  onClick={() => navigate(`/applications/${app._id}`)}
+                >
                   <TableCell>
                     <Typography variant="body1" fontWeight={500}>{app.name}</Typography>
                     {app.description && (
@@ -464,9 +468,9 @@ export default function ApplicationList() {
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={`${app.certificates?.length || 0} cert(s)`}
+                      label={`${app.certificateCount ?? app.certificates?.length ?? 0} cert(s)`}
                       size="small"
-                      color={app.certificates?.length > 0 ? 'primary' : 'default'}
+                      color={(app.certificateCount ?? app.certificates?.length ?? 0) > 0 ? 'primary' : 'default'}
                       variant="outlined"
                     />
                   </TableCell>
@@ -480,13 +484,14 @@ export default function ApplicationList() {
                   </TableCell>
                   {isAdmin && (
                     <TableCell align="right">
-                      <IconButton size="small" color="primary" onClick={() => handleEditOpen(app)}>
+                      <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); handleEditOpen(app); }}>
                         <EditIcon />
                       </IconButton>
                       <IconButton
                         size="small"
                         color="error"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           if (confirm(`Delete application "${app.name}"?`)) {
                             deleteMutation.mutate(app._id);
                           }
