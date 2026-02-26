@@ -8,6 +8,7 @@ export interface CertificateFilters {
   search?: string;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  maxDays?: number;
 }
 
 export async function getCertificates(filters: CertificateFilters = {}) {
@@ -18,6 +19,7 @@ export async function getCertificates(filters: CertificateFilters = {}) {
   if (filters.search) params.set('search', filters.search);
   if (filters.sortBy) params.set('sortBy', filters.sortBy);
   if (filters.sortOrder) params.set('sortOrder', filters.sortOrder);
+  if (filters.maxDays) params.set('maxDays', String(filters.maxDays));
 
   const response = await api.get<PaginatedResponse<Certificate>>(`/certificates?${params}`);
   return response.data;

@@ -36,9 +36,15 @@ export default function CertificateList() {
   });
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [status, setStatus] = useState<string | null>(searchParams.get('status'));
+  const maxDays = searchParams.get('maxDays');
+
+  // Build a display label for active filters
+  const filterLabel = maxDays
+    ? `Expiring within ${maxDays} days`
+    : null;
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['certificates', paginationModel.page, paginationModel.pageSize, status, search],
+    queryKey: ['certificates', paginationModel.page, paginationModel.pageSize, status, search, maxDays],
     queryFn: () =>
       getCertificates({
         page: paginationModel.page + 1,
@@ -47,17 +53,27 @@ export default function CertificateList() {
         search: search || undefined,
         sortBy: 'validTo',
         sortOrder: 'asc',
+        maxDays: maxDays ? parseInt(maxDays, 10) : undefined,
       }),
   });
 
   const handleStatusChange = (_: React.MouseEvent<HTMLElement>, newStatus: string | null) => {
     setStatus(newStatus);
+    const newParams = new URLSearchParams(searchParams);
     if (newStatus) {
-      searchParams.set('status', newStatus);
+      newParams.set('status', newStatus);
     } else {
-      searchParams.delete('status');
+      newParams.delete('status');
     }
-    setSearchParams(searchParams);
+    // Clear maxDays when manually changing status filter
+    newParams.delete('maxDays');
+    setSearchParams(newParams);
+  };
+
+  const handleClearFilters = () => {
+    setStatus(null);
+    setSearch('');
+    setSearchParams({});
   };
 
   const handleSync = async () => {
@@ -135,7 +151,7 @@ export default function CertificateList() {
         )}
       </Box>
 
-      <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap', alignItems: 'center' }}>
         <TextField
           placeholder="Search certificates..."
           value={search}
@@ -162,6 +178,15 @@ export default function CertificateList() {
           <ToggleButton value="expired">Expired</ToggleButton>
           <ToggleButton value="revoked">Revoked</ToggleButton>
         </ToggleButtonGroup>
+
+        {filterLabel && (
+          <Chip
+            label={filterLabel}
+            onDelete={handleClearFilters}
+            color="primary"
+            size="small"
+          />
+        )}
       </Box>
 
       <DataGrid

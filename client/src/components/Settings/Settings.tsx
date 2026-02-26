@@ -29,16 +29,11 @@ interface NotificationSettings {
     host: string;
     port: number;
     secure: boolean;
-    auth: {
-      user: string;
-      encryptedPassword: string;
-    };
     from: string;
   };
   thresholds: { days: number; enabled: boolean }[];
   recipients: { type: string; value: string }[];
   scheduleHour: number;
-  _smtpPasswordChanged?: boolean;
 }
 
 export default function Settings() {
@@ -81,16 +76,7 @@ export default function Settings() {
 
   const handleSave = () => {
     if (formData) {
-      const dataToSend = { ...formData };
-      // Only send password if it was actually changed by the user
-      if (!dataToSend._smtpPasswordChanged) {
-        dataToSend.smtpConfig = {
-          ...dataToSend.smtpConfig,
-          auth: { ...dataToSend.smtpConfig.auth, encryptedPassword: '********' },
-        };
-      }
-      delete dataToSend._smtpPasswordChanged;
-      updateMutation.mutate(dataToSend);
+      updateMutation.mutate(formData);
     }
   };
 
@@ -159,6 +145,9 @@ export default function Settings() {
               <Typography variant="subtitle2" gutterBottom>
                 SMTP Configuration
               </Typography>
+              <Typography variant="caption" color="textSecondary" display="block" sx={{ mb: 2 }}>
+                Anonymous relay — no authentication required
+              </Typography>
 
               <Grid container spacing={2}>
                 <Grid item xs={8}>
@@ -190,48 +179,11 @@ export default function Settings() {
                     }
                   />
                 </Grid>
-                <Grid item xs={6}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="Username"
-                    value={formData.smtpConfig.auth.user}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        smtpConfig: {
-                          ...formData.smtpConfig,
-                          auth: { ...formData.smtpConfig.auth, user: e.target.value },
-                        },
-                      })
-                    }
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    label="Password"
-                    type="password"
-                    placeholder={formData.smtpConfig.auth.encryptedPassword === '********' ? 'Leave blank to keep current' : ''}
-                    value={formData._smtpPasswordChanged ? formData.smtpConfig.auth.encryptedPassword : ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        _smtpPasswordChanged: true,
-                        smtpConfig: {
-                          ...formData.smtpConfig,
-                          auth: { ...formData.smtpConfig.auth, encryptedPassword: e.target.value },
-                        },
-                      })
-                    }
-                  />
-                </Grid>
                 <Grid item xs={12}>
                   <TextField
                     fullWidth
                     size="small"
-                    label="From Address"
+                    label="Send As (From Address)"
                     value={formData.smtpConfig.from}
                     onChange={(e) =>
                       setFormData({
@@ -239,6 +191,8 @@ export default function Settings() {
                         smtpConfig: { ...formData.smtpConfig, from: e.target.value },
                       })
                     }
+                    placeholder='Certificate Manager <certmanager@tuhs.temple.edu>'
+                    helperText='Display Name <email@domain.com>'
                   />
                 </Grid>
               </Grid>

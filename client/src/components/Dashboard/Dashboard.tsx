@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Box,
@@ -12,6 +13,7 @@ import {
   ListItem,
   ListItemText,
   Button,
+  CardActionArea,
 } from '@mui/material';
 import {
   Security as CertIcon,
@@ -27,6 +29,14 @@ import { format, differenceInDays } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
 
 const COLORS = ['#4caf50', '#ff9800', '#f44336', '#9e9e9e'];
+
+// Map chart segment names to navigation paths
+const CHART_NAV_MAP: Record<string, string> = {
+  Active: '/certificates?status=active',
+  Expiring: '/certificates?status=expiring',
+  Expired: '/certificates?status=expired',
+  Revoked: '/certificates?status=revoked',
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -45,6 +55,16 @@ export default function Dashboard() {
   const handleSync = async () => {
     await triggerSync();
   };
+
+  const handlePieClick = useCallback(
+    (data: any) => {
+      const path = CHART_NAV_MAP[data.name];
+      if (path) {
+        navigate(path);
+      }
+    },
+    [navigate]
+  );
 
   if (statsLoading || expiringLoading) {
     return (
@@ -83,70 +103,78 @@ export default function Dashboard() {
       </Box>
 
       <Grid container spacing={3}>
-        {/* Stats Cards */}
+        {/* Stats Cards - Clickable */}
         <Grid item xs={12} sm={6} md={3}>
           <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <CertIcon color="primary" />
-                <Typography variant="subtitle2" color="textSecondary">
-                  Total Certificates
-                </Typography>
-              </Box>
-              <Typography variant="h4">{stats?.total || 0}</Typography>
-            </CardContent>
+            <CardActionArea onClick={() => navigate('/certificates')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <CertIcon color="primary" />
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Total Certificates
+                  </Typography>
+                </Box>
+                <Typography variant="h4">{stats?.total || 0}</Typography>
+              </CardContent>
+            </CardActionArea>
           </Card>
         </Grid>
 
         <Grid item xs={12} sm={6} md={3}>
           <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <CheckIcon color="success" />
-                <Typography variant="subtitle2" color="textSecondary">
-                  Active
+            <CardActionArea onClick={() => navigate('/certificates?status=active')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <CheckIcon color="success" />
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Active
+                  </Typography>
+                </Box>
+                <Typography variant="h4" color="success.main">
+                  {stats?.active || 0}
                 </Typography>
-              </Box>
-              <Typography variant="h4" color="success.main">
-                {stats?.active || 0}
-              </Typography>
-            </CardContent>
+              </CardContent>
+            </CardActionArea>
           </Card>
         </Grid>
 
         <Grid item xs={12} sm={6} md={3}>
           <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <WarningIcon color="warning" />
-                <Typography variant="subtitle2" color="textSecondary">
-                  Expiring (30 days)
+            <CardActionArea onClick={() => navigate('/certificates?status=expiring&maxDays=30')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <WarningIcon color="warning" />
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Expiring (30 days)
+                  </Typography>
+                </Box>
+                <Typography variant="h4" color="warning.main">
+                  {stats?.expiringIn30Days || 0}
                 </Typography>
-              </Box>
-              <Typography variant="h4" color="warning.main">
-                {stats?.expiringIn30Days || 0}
-              </Typography>
-            </CardContent>
+              </CardContent>
+            </CardActionArea>
           </Card>
         </Grid>
 
         <Grid item xs={12} sm={6} md={3}>
           <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <ErrorIcon color="error" />
-                <Typography variant="subtitle2" color="textSecondary">
-                  Critical (7 days)
+            <CardActionArea onClick={() => navigate('/certificates?status=expiring&maxDays=7')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <ErrorIcon color="error" />
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Critical (7 days)
+                  </Typography>
+                </Box>
+                <Typography variant="h4" color="error.main">
+                  {stats?.expiringIn7Days || 0}
                 </Typography>
-              </Box>
-              <Typography variant="h4" color="error.main">
-                {stats?.expiringIn7Days || 0}
-              </Typography>
-            </CardContent>
+              </CardContent>
+            </CardActionArea>
           </Card>
         </Grid>
 
-        {/* Chart */}
+        {/* Chart - Clickable Sections */}
         <Grid item xs={12} md={6}>
           <Card sx={{ height: 350 }}>
             <CardContent>
@@ -165,13 +193,21 @@ export default function Dashboard() {
                       paddingAngle={2}
                       dataKey="value"
                       label={({ name, value }) => `${name}: ${value}`}
+                      onClick={handlePieClick}
+                      style={{ cursor: 'pointer' }}
                     >
                       {chartData.map((_, index) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
                     <Tooltip />
-                    <Legend />
+                    <Legend
+                      onClick={(e) => {
+                        const path = CHART_NAV_MAP[e.value as string];
+                        if (path) navigate(path);
+                      }}
+                      wrapperStyle={{ cursor: 'pointer' }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (

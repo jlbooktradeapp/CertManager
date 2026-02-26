@@ -13,6 +13,7 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
       search,
       sortBy = 'validTo',
       sortOrder = 'asc',
+      maxDays,
     } = req.query;
 
     const pageNum = parseInt(page as string, 10);
@@ -24,6 +25,18 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
 
     if (status) {
       query.status = status;
+    }
+
+    // Filter by max days until expiration (e.g., maxDays=7 for critical)
+    if (maxDays) {
+      const days = parseInt(maxDays as string, 10);
+      const now = new Date();
+      const futureDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+      query.validTo = { $gte: now, $lte: futureDate };
+      // Override status to exclude already expired/revoked
+      if (!status) {
+        query.status = { $nin: ['expired', 'revoked'] };
+      }
     }
 
     if (search) {
