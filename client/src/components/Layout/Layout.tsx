@@ -29,6 +29,7 @@ import {
   Logout as LogoutIcon,
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
+  Apps as AppsIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../context/AuthContext';
 import { useThemeMode } from '../../context/ThemeContext';
@@ -41,6 +42,7 @@ const menuItems = [
   { text: 'Certificate Authorities', icon: <CAIcon />, path: '/ca' },
   { text: 'CSR Requests', icon: <CSRIcon />, path: '/csr' },
   { text: 'Servers', icon: <ServerIcon />, path: '/servers' },
+  { text: 'Applications', icon: <AppsIcon />, path: '/applications' },
 ];
 
 export default function Layout() {

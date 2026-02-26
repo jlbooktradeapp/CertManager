@@ -10,6 +10,7 @@ import caRoutes from './routes/ca';
 import csrRoutes from './routes/csr';
 import serverRoutes from './routes/servers';
 import settingsRoutes from './routes/settings';
+import applicationRoutes from './routes/applications';
 
 const app: Application = express();
 
@@ -49,6 +50,7 @@ app.use(`${API_PREFIX}/ca`, caRoutes);
 app.use(`${API_PREFIX}/csr`, csrRoutes);
 app.use(`${API_PREFIX}/servers`, serverRoutes);
 app.use(`${API_PREFIX}/settings`, settingsRoutes);
+app.use(`${API_PREFIX}/applications`, applicationRoutes);
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {

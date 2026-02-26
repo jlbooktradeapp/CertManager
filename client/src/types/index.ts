@@ -97,6 +97,28 @@ export interface Server {
   lastSyncedAt: string;
 }
 
+export interface ApplicationOwner {
+  name: string;
+  email: string;
+  role?: string;
+}
+
+export interface Application {
+  _id: string;
+  name: string;
+  description?: string;
+  owners: ApplicationOwner[];
+  vendor?: {
+    name: string;
+    contactName?: string;
+    contactEmail?: string;
+  };
+  status: 'active' | 'inactive' | 'retired';
+  certificates: Certificate[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CSRRequest {
   _id: string;
   commonName: string;
