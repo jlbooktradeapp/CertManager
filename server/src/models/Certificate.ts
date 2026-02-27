@@ -38,6 +38,8 @@ export interface ICertificate extends Document {
   validTo: Date;
   keyUsage: string[];
   extendedKeyUsage: string[];
+  keySize?: number;
+  encryptionType?: string;
   templateName?: string;
   status: 'active' | 'expiring' | 'expired' | 'revoked';
   deployedTo: IDeployment[];
@@ -96,6 +98,8 @@ const CertificateSchema = new Schema<ICertificate>({
   validTo: { type: Date, required: true, index: true },
   keyUsage: [{ type: String }],
   extendedKeyUsage: [{ type: String }],
+  keySize: Number,
+  encryptionType: String,
   templateName: String,
   status: {
     type: String,

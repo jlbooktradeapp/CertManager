@@ -33,9 +33,8 @@ const COLORS = ['#4caf50', '#ff9800', '#f44336', '#9e9e9e'];
 // Map chart segment names to navigation paths
 const CHART_NAV_MAP: Record<string, string> = {
   Active: '/certificates?status=active',
-  Expiring: '/certificates?status=expiring',
-  Expired: '/certificates?status=expired',
-  Revoked: '/certificates?status=revoked',
+  'Expiring (30d)': '/certificates?status=expiring&maxDays=30',
+  'Critical (7d)': '/certificates?status=expiring&maxDays=7',
 };
 
 export default function Dashboard() {
@@ -81,10 +80,9 @@ export default function Dashboard() {
   }
 
   const chartData = [
-    { name: 'Active', value: stats?.active || 0 },
-    { name: 'Expiring', value: stats?.expiring || 0 },
-    { name: 'Expired', value: stats?.expired || 0 },
-    { name: 'Revoked', value: stats?.revoked || 0 },
+    { name: 'Active', value: (stats?.active || 0) - (stats?.expiringIn30Days || 0) },
+    { name: 'Expiring (30d)', value: (stats?.expiringIn30Days || 0) - (stats?.expiringIn7Days || 0) },
+    { name: 'Critical (7d)', value: stats?.expiringIn7Days || 0 },
   ].filter(item => item.value > 0);
 
   return (
@@ -176,23 +174,27 @@ export default function Dashboard() {
 
         {/* Chart - Clickable Sections */}
         <Grid item xs={12} md={6}>
-          <Card sx={{ height: 350 }}>
+          <Card sx={{ height: 420 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
                 Certificate Status Distribution
               </Typography>
               {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
+                <ResponsiveContainer width="100%" height={350}>
                   <PieChart>
                     <Pie
                       data={chartData}
                       cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={100}
+                      cy="45%"
+                      innerRadius={65}
+                      outerRadius={110}
                       paddingAngle={2}
                       dataKey="value"
-                      label={({ name, value }) => `${name}: ${value}`}
+                      label={({ name, value, x, y, textAnchor }) => (
+                        <text x={x} y={y} textAnchor={textAnchor} fill="#fff" fontSize={13}>
+                          {`${name}: ${value}`}
+                        </text>
+                      )}
                       onClick={handlePieClick}
                       style={{ cursor: 'pointer' }}
                     >
@@ -211,7 +213,7 @@ export default function Dashboard() {
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 280 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 350 }}>
                   <Typography color="textSecondary">No certificates found</Typography>
                 </Box>
               )}
@@ -221,7 +223,7 @@ export default function Dashboard() {
 
         {/* Expiring Soon */}
         <Grid item xs={12} md={6}>
-          <Card sx={{ height: 350 }}>
+          <Card sx={{ height: 420 }}>
             <CardContent>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                 <Typography variant="h6">Expiring Soon</Typography>
@@ -230,7 +232,7 @@ export default function Dashboard() {
                 </Button>
               </Box>
               {expiring && expiring.length > 0 ? (
-                <List dense sx={{ maxHeight: 260, overflow: 'auto' }}>
+                <List dense sx={{ maxHeight: 330, overflow: 'auto' }}>
                   {expiring.slice(0, 5).map((cert) => {
                     const daysLeft = differenceInDays(new Date(cert.validTo), new Date());
                     return (
@@ -253,7 +255,7 @@ export default function Dashboard() {
                   })}
                 </List>
               ) : (
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 260 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 330 }}>
                   <Typography color="textSecondary">No certificates expiring soon</Typography>
                 </Box>
               )}

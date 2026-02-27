@@ -205,7 +205,7 @@ export async function getCAIssuedCertificates(configString: string, sinceDate?: 
   return executePowerShell({
     scriptFile: 'Get-IssuedCertificates.ps1',
     parameters,
-    timeout: 600000, // 10 minutes for large CAs
+    timeout: 3600000, // 60 minutes for large CAs with extension parsing
   });
 }
 

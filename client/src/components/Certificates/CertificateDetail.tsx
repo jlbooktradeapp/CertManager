@@ -182,6 +182,18 @@ export default function CertificateDetail() {
                     <Typography variant="body2">{cert.templateName}</Typography>
                   </Grid>
                 )}
+                {cert.keySize && (
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="textSecondary">Key Size</Typography>
+                    <Typography variant="body2">{cert.keySize} bits</Typography>
+                  </Grid>
+                )}
+                {cert.encryptionType && (
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="textSecondary">Encryption Type</Typography>
+                    <Typography variant="body2">{cert.encryptionType}</Typography>
+                  </Grid>
+                )}
               </Grid>
             </CardContent>
           </Card>
@@ -235,6 +247,28 @@ export default function CertificateDetail() {
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                     {cert.subjectAlternativeNames.map((san, index) => (
                       <Chip key={index} label={san} size="small" variant="outlined" />
+                    ))}
+                  </Box>
+                </>
+              )}
+              {cert.keyUsage && cert.keyUsage.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" gutterBottom>Key Usage</Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                    {cert.keyUsage.map((usage, index) => (
+                      <Chip key={index} label={usage} size="small" variant="outlined" color="primary" />
+                    ))}
+                  </Box>
+                </>
+              )}
+              {cert.extendedKeyUsage && cert.extendedKeyUsage.length > 0 && (
+                <>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" gutterBottom>Extended Key Usage</Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                    {cert.extendedKeyUsage.map((usage, index) => (
+                      <Chip key={index} label={usage} size="small" variant="outlined" color="secondary" />
                     ))}
                   </Box>
                 </>

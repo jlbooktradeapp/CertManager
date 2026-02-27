@@ -172,7 +172,11 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
             subject: parseSubject(certData.Subject),
             validFrom: new Date(certData.NotBefore),
             validTo: new Date(certData.NotAfter),
+            keyUsage: certData.KeyUsage || [],
+            extendedKeyUsage: certData.ExtendedKeyUsage || [],
             templateName: certData.Template,
+            keySize: certData.KeySize || undefined,
+            encryptionType: certData.EncryptionType || undefined,
             'metadata.lastSyncedAt': new Date(),
           },
           $setOnInsert: {

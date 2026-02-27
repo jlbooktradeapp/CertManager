@@ -34,6 +34,8 @@ export interface Certificate {
   validTo: string;
   keyUsage: string[];
   extendedKeyUsage: string[];
+  keySize?: number;
+  encryptionType?: string;
   templateName?: string;
   status: 'active' | 'expiring' | 'expired' | 'revoked';
   deployedTo: {
