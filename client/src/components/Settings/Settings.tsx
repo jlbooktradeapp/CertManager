@@ -20,7 +20,7 @@ import {
   TableRow,
   CircularProgress,
 } from '@mui/material';
-import { Delete as DeleteIcon, Send as SendIcon, Add as AddIcon, CalendarMonth as CalendarIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Send as SendIcon, Add as AddIcon, CalendarMonth as CalendarIcon, Summarize as DigestIcon } from '@mui/icons-material';
 import api from '../../services/api';
 import { getTemplateNames } from '../../services/certificates';
 
@@ -95,6 +95,13 @@ export default function Settings() {
   const testMutation = useMutation({
     mutationFn: async (email: string) => {
       const response = await api.post('/settings/notifications/test', { email });
+      return response.data;
+    },
+  });
+
+  const triggerDigestMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/settings/notifications/trigger');
       return response.data;
     },
   });
@@ -278,6 +285,34 @@ export default function Settings() {
               {testMutation.isError && (
                 <Alert severity="error" sx={{ mt: 1 }}>
                   Failed to send test email
+                </Alert>
+              )}
+
+              <Divider sx={{ my: 2 }} />
+
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Button
+                  variant="outlined"
+                  startIcon={<DigestIcon />}
+                  onClick={() => triggerDigestMutation.mutate()}
+                  disabled={triggerDigestMutation.isPending}
+                >
+                  {triggerDigestMutation.isPending ? 'Sending...' : 'Send Admin Digest Now'}
+                </Button>
+                <Typography variant="body2" color="text.secondary">
+                  Sends the daily digest and owner notifications immediately
+                </Typography>
+              </Box>
+
+              {triggerDigestMutation.isSuccess && (
+                <Alert severity="success" sx={{ mt: 1 }}>
+                  Notifications sent: {(triggerDigestMutation.data as any)?.sent || 0} sent, {(triggerDigestMutation.data as any)?.failed || 0} failed
+                </Alert>
+              )}
+
+              {triggerDigestMutation.isError && (
+                <Alert severity="error" sx={{ mt: 1 }}>
+                  Failed to trigger notifications
                 </Alert>
               )}
             </CardContent>
