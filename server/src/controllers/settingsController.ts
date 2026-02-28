@@ -45,6 +45,16 @@ export async function getNotificationSettings(req: Request, res: Response): Prom
       safeSettings.calendarConfig.graphClientSecret = '********';
     }
 
+    // Ensure cleanupConfig defaults for older documents
+    if (!safeSettings.cleanupConfig) {
+      safeSettings.cleanupConfig = {
+        retentionDays: 90,
+        digestEnabled: false,
+        digestFrequency: 'weekly',
+        digestDay: 1,
+      };
+    }
+
     res.json(safeSettings);
   } catch (error) {
     logger.error('Get notification settings error:', error);
@@ -105,6 +115,18 @@ export async function updateNotificationSettings(req: AuthenticatedRequest, res:
         settings.calendarConfig.graphClientSecret = cc.graphClientSecret;
       }
       if (cc.graphCalendarEmail !== undefined) settings.calendarConfig.graphCalendarEmail = cc.graphCalendarEmail;
+    }
+
+    if (updates.cleanupConfig) {
+      const cl = updates.cleanupConfig;
+      if (typeof cl.retentionDays === 'number') {
+        settings.cleanupConfig.retentionDays = Math.max(1, cl.retentionDays);
+      }
+      if (typeof cl.digestEnabled === 'boolean') settings.cleanupConfig.digestEnabled = cl.digestEnabled;
+      if (cl.digestFrequency) settings.cleanupConfig.digestFrequency = cl.digestFrequency;
+      if (typeof cl.digestDay === 'number') {
+        settings.cleanupConfig.digestDay = Math.max(0, Math.min(6, cl.digestDay));
+      }
     }
 
     await settings.save();

@@ -189,6 +189,9 @@ export async function detectReissuedCertificates(): Promise<number> {
   return markedCount;
 }
 
+// Track CAs currently being synced to prevent concurrent syncs
+const activeSyncs = new Set<string>();
+
 export async function syncAllCAs(): Promise<void> {
   const cas = await CertificateAuthority.find({ syncEnabled: true });
 
@@ -210,6 +213,17 @@ export async function syncAllCAs(): Promise<void> {
 // Replace the syncCA function (around line 114) in certificateService.ts with this:
 
 export async function syncCA(ca: ICertificateAuthority): Promise<number> {
+  const caKey = ca._id.toString();
+
+  // Prevent concurrent syncs on the same CA
+  if (activeSyncs.has(caKey)) {
+    logger.warn(`Sync already in progress for ${ca.name}, skipping`);
+    return 0;
+  }
+
+  activeSyncs.add(caKey);
+
+  try {
   logger.info(`Syncing certificates from CA: ${ca.name}`);
 
   // Use last sync date for incremental sync if available
@@ -288,6 +302,10 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
 
   logger.info(`Synced ${syncedCount} certificates from CA: ${ca.name}`);
   return syncedCount;
+
+  } finally {
+    activeSyncs.delete(caKey);
+  }
 }
 
 function extractCN(subject: string): string {
