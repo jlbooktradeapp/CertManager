@@ -1,7 +1,13 @@
 # Get-IssuedCertificates.ps1
 # Retrieves issued certificates from a Windows Certificate Authority
 # Uses ICertView2 COM object with batched iteration to prevent COM handle timeout
-# Each batch uses a single RequestID >= restriction, reads N rows, then reconnects
+#
+# Three sync modes:
+#   1. Full (first-time): Pulls all issued certs with NotAfter >= (today - MaxExpirationYears)
+#   2. Incremental (RequestID): Pulls only certs with RequestID > StartRequestID
+#   3. Legacy (SinceDate): Pulls certs with NotAfter >= SinceDate (backward compatible)
+#
+# The highest RequestID seen is written to stdout as LASTID:{id} for the caller to store.
 
 param(
     [Parameter(Mandatory=$true)]
@@ -11,10 +17,16 @@ param(
     [string]$SinceDate = "",
 
     [Parameter(Mandatory=$false)]
+    [int]$StartRequestID = 0,
+
+    [Parameter(Mandatory=$false)]
+    [int]$MaxExpirationYears = 2,
+
+    [Parameter(Mandatory=$false)]
     [string]$OutputFile = "",
 
     [Parameter(Mandatory=$false)]
-    [int]$BatchSize = 5000
+    [int]$BatchSize = 50000
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,9 +89,22 @@ try {
         "RawCertificate"
     )
 
+    # Determine sync mode
+    $isIncremental = ($StartRequestID -gt 0)
+    $isLegacy = ($SinceDate -ne "" -and $StartRequestID -eq 0)
+
+    if ($isIncremental) {
+        Write-Host "Incremental sync: RequestID > $StartRequestID" -ForegroundColor Green
+    } elseif ($isLegacy) {
+        Write-Host "Legacy sync: NotAfter >= $SinceDate" -ForegroundColor Yellow
+    } else {
+        Write-Host "Full sync: NotAfter >= $(([DateTime]::Now.AddYears(-$MaxExpirationYears)).ToString('yyyy-MM-dd')) ($MaxExpirationYears year window)" -ForegroundColor Cyan
+    }
+
     $certificates = [System.Collections.ArrayList]::new()
-    $nextStartID = 1
+    $nextStartID = if ($isIncremental) { $StartRequestID + 1 } else { 1 }
     $batchNum = 0
+    $globalLastSeenID = 0
 
     while ($true) {
         $batchNum++
@@ -101,18 +126,29 @@ try {
                 1, 0, 20
             )
 
-            # Filter: RequestID >= nextStartID (single restriction on RequestID)
+            # Filter: RequestID >= nextStartID
             $CaView.SetRestriction(
                 $CaView.GetColumnIndex($false, "RequestID"),
                 16, 0, $nextStartID  # CVR_SEEK_GE = 16
             )
 
-            # If SinceDate is provided, restrict to certs not yet expired as of that date
-            if ($SinceDate -ne "") {
+            # Apply expiration filter based on sync mode
+            if ($isIncremental) {
+                # Incremental: no expiration filter — pull everything new regardless
+                # (newly issued certs won't be expired)
+            } elseif ($isLegacy) {
+                # Legacy: NotAfter >= SinceDate
                 $sinceDateTime = [DateTime]::Parse($SinceDate)
                 $CaView.SetRestriction(
                     $CaView.GetColumnIndex($false, "NotAfter"),
                     16, 0, $sinceDateTime
+                )
+            } else {
+                # Full sync: NotAfter >= (today - MaxExpirationYears)
+                $expirationCutoff = [DateTime]::Now.AddYears(-$MaxExpirationYears)
+                $CaView.SetRestriction(
+                    $CaView.GetColumnIndex($false, "NotAfter"),
+                    16, 0, $expirationCutoff
                 )
             }
 
@@ -125,10 +161,13 @@ try {
                     $CertData[$ColEnum.GetDisplayName()] = $ColEnum.GetValue(0)
                 }
 
-                # Track the RequestID for next batch
-                $reqID = $CertData["Request ID"]
+                # Track the RequestID for next batch and watermark
+                $reqID = $CertData["Issued Request ID"]
                 if ($reqID -and $reqID -gt $lastSeenID) {
                     $lastSeenID = $reqID
+                }
+                if ($reqID -and $reqID -gt $globalLastSeenID) {
+                    $globalLastSeenID = $reqID
                 }
 
                 # Defaults
@@ -190,6 +229,7 @@ try {
                 }
 
                 $cert = @{
+                    RequestID       = $reqID
                     SerialNumber    = $CertData["Serial Number"]
                     CommonName      = $CommonName
                     Subject         = $Subject
@@ -221,7 +261,7 @@ try {
             Write-Warning "Batch $batchNum (starting at ID $nextStartID) failed: $_"
         }
 
-        Write-Host "Batch $batchNum complete: $batchCount certs (total: $($certificates.Count))" -ForegroundColor Cyan
+        Write-Host "Batch $batchNum complete: $batchCount certs (total: $($certificates.Count), lastID: $lastSeenID)" -ForegroundColor Cyan
 
         # If we got fewer rows than BatchSize, we've reached the end
         if ($batchCount -lt $BatchSize) {
@@ -240,6 +280,9 @@ try {
     } else {
         Write-Output $json
     }
+
+    # Output the highest RequestID seen for watermark storage
+    Write-Output "LASTID:$globalLastSeenID"
 
 } catch {
     Write-Error "Failed to retrieve certificates: $_"

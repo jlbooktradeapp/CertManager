@@ -212,6 +212,10 @@ export async function syncAllCAs(): Promise<void> {
 
 // Replace the syncCA function (around line 114) in certificateService.ts with this:
 
+// Replace the syncCA function in certificateService.ts with this:
+// Also update the import at the top:
+//   import { getCAIssuedCertificates, SyncResult } from './powershellService';
+
 export async function syncCA(ca: ICertificateAuthority): Promise<number> {
   const caKey = ca._id.toString();
 
@@ -224,84 +228,100 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
   activeSyncs.add(caKey);
 
   try {
-  logger.info(`Syncing certificates from CA: ${ca.name}`);
+    logger.info(`Syncing certificates from CA: ${ca.name}`);
 
-  // Use last sync date for incremental sync if available
-  let sinceDate: string | undefined;
-  if (ca.lastSyncedAt) {
-    // Format date for certutil - pull anything not yet expired as of last sync
-    sinceDate = ca.lastSyncedAt.toLocaleDateString('en-US');
-    logger.info(`Incremental sync for ${ca.name} since ${sinceDate}`);
-  } else {
-    logger.info(`Full sync for ${ca.name} (first time)`);
-  }
+    let result;
 
-  const result = await getCAIssuedCertificates(ca.configString, sinceDate);
-
-  if (!result.success) {
-    throw new Error(`Failed to get certificates from CA: ${result.error}`);
-  }
-
-  let certificates: any[];
-  try {
-    certificates = JSON.parse(result.output);
-    if (!Array.isArray(certificates)) {
-      certificates = [certificates];
+    if (ca.lastRequestID && ca.lastRequestID > 0) {
+      // Incremental sync using RequestID watermark — only pulls newly issued certs
+      logger.info(`Incremental sync for ${ca.name} (RequestID > ${ca.lastRequestID})`);
+      result = await getCAIssuedCertificates(ca.configString, {
+        startRequestID: ca.lastRequestID,
+      });
+    } else if (ca.lastSyncedAt) {
+      // Legacy fallback: CA was synced before but doesn't have a RequestID watermark
+      // Use SinceDate for this one sync, then switch to RequestID going forward
+      const sinceDate = ca.lastSyncedAt.toLocaleDateString('en-US');
+      logger.info(`Legacy incremental sync for ${ca.name} since ${sinceDate} (will switch to RequestID after)`);
+      result = await getCAIssuedCertificates(ca.configString, {
+        sinceDate,
+      });
+    } else {
+      // First-time sync — pull certs within the expiration window (default 2 years)
+      logger.info(`Full sync for ${ca.name} (first time, 2-year window)`);
+      result = await getCAIssuedCertificates(ca.configString, {
+        maxExpirationYears: 2,
+      });
     }
-  } catch {
-    logger.error('Failed to parse CA output:', result.output);
-    throw new Error('Failed to parse certificate data from CA');
-  }
 
-  logger.info(`Processing ${certificates.length} certificates from ${ca.name}`);
+    if (!result.success) {
+      throw new Error(`Failed to get certificates from CA: ${result.error}`);
+    }
 
-  let syncedCount = 0;
-
-  for (const certData of certificates) {
+    let certificates: any[];
     try {
-      await Certificate.findOneAndUpdate(
-        { serialNumber: certData.SerialNumber },
-        {
-          $set: {
-            serialNumber: certData.SerialNumber,
-            thumbprint: certData.Thumbprint || '',
-            commonName: certData.CommonName || extractCN(certData.Subject),
-            subjectAlternativeNames: certData.SANs || [],
-            issuer: {
-              caId: ca._id,
-              commonName: ca.displayName,
-            },
-            subject: parseSubject(certData.Subject),
-            validFrom: new Date(certData.NotBefore),
-            validTo: new Date(certData.NotAfter),
-            keyUsage: certData.KeyUsage || [],
-            extendedKeyUsage: certData.ExtendedKeyUsage || [],
-            templateName: certData.Template,
-            keySize: certData.KeySize || undefined,
-            encryptionType: certData.EncryptionType || undefined,
-            'metadata.lastSyncedAt': new Date(),
-          },
-          $setOnInsert: {
-            status: 'active',
-            deployedTo: [],
-            notificationsSent: [],
-            'metadata.discoveredAt': new Date(),
-          },
-        },
-        { upsert: true, new: true }
-      );
-      syncedCount++;
-    } catch (error) {
-      logger.error(`Failed to sync certificate ${certData.SerialNumber}:`, error);
+      certificates = JSON.parse(result.output);
+      if (!Array.isArray(certificates)) {
+        certificates = [certificates];
+      }
+    } catch {
+      logger.error('Failed to parse CA output:', result.output?.substring(0, 200));
+      throw new Error('Failed to parse certificate data from CA');
     }
-  }
 
-  // Update CA last synced time
-  ca.lastSyncedAt = new Date();
-  await ca.save();
+    logger.info(`Processing ${certificates.length} certificates from ${ca.name}`);
 
-  logger.info(`Synced ${syncedCount} certificates from CA: ${ca.name}`);
-  return syncedCount;
+    let syncedCount = 0;
+
+    for (const certData of certificates) {
+      try {
+        await Certificate.findOneAndUpdate(
+          { serialNumber: certData.SerialNumber },
+          {
+            $set: {
+              serialNumber: certData.SerialNumber,
+              thumbprint: certData.Thumbprint || '',
+              commonName: certData.CommonName || extractCN(certData.Subject),
+              subjectAlternativeNames: certData.SANs || [],
+              issuer: {
+                caId: ca._id,
+                commonName: ca.displayName,
+              },
+              subject: parseSubject(certData.Subject),
+              validFrom: new Date(certData.NotBefore),
+              validTo: new Date(certData.NotAfter),
+              keyUsage: certData.KeyUsage || [],
+              extendedKeyUsage: certData.ExtendedKeyUsage || [],
+              templateName: certData.Template,
+              keySize: certData.KeySize || undefined,
+              encryptionType: certData.EncryptionType || undefined,
+              'metadata.lastSyncedAt': new Date(),
+            },
+            $setOnInsert: {
+              status: 'active',
+              deployedTo: [],
+              notificationsSent: [],
+              'metadata.discoveredAt': new Date(),
+            },
+          },
+          { upsert: true, new: true }
+        );
+        syncedCount++;
+      } catch (error) {
+        logger.error(`Failed to sync certificate ${certData.SerialNumber}:`, error);
+      }
+    }
+
+    // Update CA: lastSyncedAt and lastRequestID watermark
+    ca.lastSyncedAt = new Date();
+    if (result.lastRequestID && result.lastRequestID > (ca.lastRequestID || 0)) {
+      ca.lastRequestID = result.lastRequestID;
+      logger.info(`Updated ${ca.name} RequestID watermark to ${ca.lastRequestID}`);
+    }
+    await ca.save();
+
+    logger.info(`Synced ${syncedCount} certificates from CA: ${ca.name}`);
+    return syncedCount;
 
   } finally {
     activeSyncs.delete(caKey);

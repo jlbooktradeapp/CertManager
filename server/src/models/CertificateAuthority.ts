@@ -21,6 +21,7 @@ export interface ICertificateAuthority extends Document {
   };
   templates: ITemplate[];
   lastSyncedAt: Date;
+  lastRequestID: number;
   syncEnabled: boolean;
   syncIntervalMinutes: number;
 }
@@ -54,6 +55,7 @@ const CertificateAuthoritySchema = new Schema<ICertificateAuthority>({
   },
   templates: [TemplateSchema],
   lastSyncedAt: Date,
+  lastRequestID: { type: Number, default: 0 },
   syncEnabled: { type: Boolean, default: true },
   syncIntervalMinutes: { type: Number, default: 60 },
 }, {

@@ -193,7 +193,20 @@ export async function getRemoteCertificates(hostname: string): Promise<PowerShel
   });
 }
 
-export async function getCAIssuedCertificates(configString: string, sinceDate?: string): Promise<PowerShellResult> {
+// Replace the getCAIssuedCertificates function in powershellService.ts with this:
+
+export interface SyncResult extends PowerShellResult {
+  lastRequestID?: number;
+}
+
+export async function getCAIssuedCertificates(
+  configString: string,
+  options?: {
+    sinceDate?: string;
+    startRequestID?: number;
+    maxExpirationYears?: number;
+  }
+): Promise<SyncResult> {
   if (!validateConfigString(configString)) {
     return { success: false, output: '', error: 'Invalid CA config string' };
   }
@@ -207,8 +220,22 @@ export async function getCAIssuedCertificates(configString: string, sinceDate?: 
     ConfigString: configString,
     OutputFile: tempFile,
   };
-  if (sinceDate) {
-    parameters.SinceDate = sinceDate;
+
+  // Incremental sync via RequestID watermark (preferred)
+  if (options?.startRequestID && options.startRequestID > 0) {
+    parameters.StartRequestID = options.startRequestID.toString();
+    logger.info(`CA sync mode: incremental (RequestID > ${options.startRequestID})`);
+  }
+  // Legacy incremental via SinceDate (backward compatible)
+  else if (options?.sinceDate) {
+    parameters.SinceDate = options.sinceDate;
+    logger.info(`CA sync mode: legacy (NotAfter >= ${options.sinceDate})`);
+  }
+  // Full sync with expiration window
+  else {
+    const years = options?.maxExpirationYears ?? 2;
+    parameters.MaxExpirationYears = years.toString();
+    logger.info(`CA sync mode: full (${years}-year expiration window)`);
   }
 
   logger.info(`CA sync temp file: ${tempFile}`);
@@ -227,44 +254,56 @@ export async function getCAIssuedCertificates(configString: string, sinceDate?: 
     return result;
   }
 
-  // If PowerShell wrote to the temp file, read it back
-  if (result.output.trim().startsWith('FILE:')) {
-    const filePath = result.output.trim().replace('FILE:', '');
-    try {
-      const fileStats = fs.statSync(filePath);
-      logger.info(`CA sync output file size: ${(fileStats.size / 1024 / 1024).toFixed(1)} MB`);
+  // Parse stdout lines — may contain FILE:{path} and LASTID:{number}
+  const outputLines = result.output.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let lastRequestID: number | undefined;
+  let fileLine: string | undefined;
 
-      if (fileStats.size === 0) {
-        fs.unlinkSync(filePath);
-        return { success: true, output: '[]' };
-      }
-
-      const data = fs.readFileSync(filePath, 'utf-8');
-      fs.unlinkSync(filePath); // Clean up temp file
-      return { success: true, output: data };
-    } catch (err: any) {
-      logger.error(`Failed to read sync output file ${filePath}: ${err.message}`);
-      return { success: false, output: '', error: `Failed to read sync output file: ${err.message}` };
+  for (const line of outputLines) {
+    if (line.startsWith('LASTID:')) {
+      lastRequestID = parseInt(line.replace('LASTID:', ''), 10);
+      if (isNaN(lastRequestID)) lastRequestID = undefined;
+    } else if (line.startsWith('FILE:')) {
+      fileLine = line.replace('FILE:', '');
     }
   }
 
-  // Temp file might exist even if stdout didn't have FILE: prefix (script wrote it directly)
+  if (lastRequestID) {
+    logger.info(`CA sync last RequestID: ${lastRequestID}`);
+  }
+
+  // If PowerShell wrote to the temp file, read it back
+  const fileToRead = fileLine || tempFile;
+
   try {
-    if (fs.existsSync(tempFile)) {
-      const fileStats = fs.statSync(tempFile);
-      logger.info(`CA sync found temp file on disk: ${(fileStats.size / 1024 / 1024).toFixed(1)} MB`);
-      if (fileStats.size > 0) {
-        const data = fs.readFileSync(tempFile, 'utf-8');
-        fs.unlinkSync(tempFile);
-        return { success: true, output: data };
+    if (fs.existsSync(fileToRead)) {
+      const fileStats = fs.statSync(fileToRead);
+      logger.info(`CA sync output file size: ${(fileStats.size / 1024 / 1024).toFixed(1)} MB`);
+
+      if (fileStats.size === 0) {
+        fs.unlinkSync(fileToRead);
+        return { success: true, output: '[]', lastRequestID };
       }
-      fs.unlinkSync(tempFile);
+
+      const data = fs.readFileSync(fileToRead, 'utf-8');
+      fs.unlinkSync(fileToRead); // Clean up temp file
+      return { success: true, output: data, lastRequestID };
     }
-  } catch {}
+  } catch (err: any) {
+    logger.error(`Failed to read sync output file ${fileToRead}: ${err.message}`);
+    return { success: false, output: '', error: `Failed to read sync output file: ${err.message}` };
+  }
+
+  // Clean up temp file if it's different from fileToRead
+  if (fileLine && fileLine !== tempFile) {
+    try { fs.unlinkSync(tempFile); } catch {}
+  }
 
   // Fallback: return raw stdout (works for small CAs)
-  logger.info(`CA sync falling back to stdout output (length: ${result.output?.length || 0})`);
-  return result;
+  // Filter out our metadata lines from the output
+  const jsonOutput = outputLines.filter(l => !l.startsWith('FILE:') && !l.startsWith('LASTID:')).join('\n');
+  logger.info(`CA sync falling back to stdout output (length: ${jsonOutput?.length || 0})`);
+  return { success: true, output: jsonOutput || '[]', lastRequestID };
 }
 
 export async function submitCSR(
