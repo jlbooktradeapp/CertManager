@@ -25,6 +25,7 @@ const ALLOWED_SCRIPTS = new Set([
   'Get-IssuedCertificates.ps1',
   'Install-Certificate.ps1',
   'New-CertificateRequest.ps1',
+  'Revoke-Certificate.ps1',
   'Submit-CertificateRequest.ps1',
 ]);
 
@@ -42,7 +43,7 @@ function validateHostname(hostname: string): boolean {
 }
 
 // Validate that a value contains only safe characters for a CA config string (hostname\CAName)
-const SAFE_CONFIG_STRING_REGEX = /^[a-zA-Z0-9._\\-]+$/;
+const SAFE_CONFIG_STRING_REGEX = /^[a-zA-Z0-9._ \\-]+$/;
 
 function validateConfigString(value: string): boolean {
   return SAFE_CONFIG_STRING_REGEX.test(value) && value.length <= 500;
@@ -197,16 +198,73 @@ export async function getCAIssuedCertificates(configString: string, sinceDate?: 
     return { success: false, output: '', error: 'Invalid CA config string' };
   }
 
-  const parameters: Record<string, string> = { ConfigString: configString };
+  // Use a temp file to avoid Node.js string length limits on large CAs
+  const os = await import('os');
+  const fs = await import('fs');
+  const tempFile = path.join(os.tmpdir(), `certmanager-sync-${Date.now()}.json`);
+
+  const parameters: Record<string, string> = {
+    ConfigString: configString,
+    OutputFile: tempFile,
+  };
   if (sinceDate) {
     parameters.SinceDate = sinceDate;
   }
 
-  return executePowerShell({
+  logger.info(`CA sync temp file: ${tempFile}`);
+
+  const result = await executePowerShell({
     scriptFile: 'Get-IssuedCertificates.ps1',
     parameters,
-    timeout: 3600000, // 60 minutes for large CAs with extension parsing
+    timeout: 14400000, // 4 hours for very large CAs with batched processing
   });
+
+  logger.info(`CA sync PS result - success: ${result.success}, output length: ${result.output?.length || 0}, error: ${result.error || 'none'}`);
+
+  if (!result.success) {
+    // Clean up temp file on failure
+    try { fs.unlinkSync(tempFile); } catch {}
+    return result;
+  }
+
+  // If PowerShell wrote to the temp file, read it back
+  if (result.output.trim().startsWith('FILE:')) {
+    const filePath = result.output.trim().replace('FILE:', '');
+    try {
+      const fileStats = fs.statSync(filePath);
+      logger.info(`CA sync output file size: ${(fileStats.size / 1024 / 1024).toFixed(1)} MB`);
+
+      if (fileStats.size === 0) {
+        fs.unlinkSync(filePath);
+        return { success: true, output: '[]' };
+      }
+
+      const data = fs.readFileSync(filePath, 'utf-8');
+      fs.unlinkSync(filePath); // Clean up temp file
+      return { success: true, output: data };
+    } catch (err: any) {
+      logger.error(`Failed to read sync output file ${filePath}: ${err.message}`);
+      return { success: false, output: '', error: `Failed to read sync output file: ${err.message}` };
+    }
+  }
+
+  // Temp file might exist even if stdout didn't have FILE: prefix (script wrote it directly)
+  try {
+    if (fs.existsSync(tempFile)) {
+      const fileStats = fs.statSync(tempFile);
+      logger.info(`CA sync found temp file on disk: ${(fileStats.size / 1024 / 1024).toFixed(1)} MB`);
+      if (fileStats.size > 0) {
+        const data = fs.readFileSync(tempFile, 'utf-8');
+        fs.unlinkSync(tempFile);
+        return { success: true, output: data };
+      }
+      fs.unlinkSync(tempFile);
+    }
+  } catch {}
+
+  // Fallback: return raw stdout (works for small CAs)
+  logger.info(`CA sync falling back to stdout output (length: ${result.output?.length || 0})`);
+  return result;
 }
 
 export async function submitCSR(
@@ -276,3 +334,22 @@ export async function bindIISCertificate(
 
 // Export validators for use in controllers
 export { validateHostname, validateConfigString, sanitizePSString };
+
+export async function revokeCertificate(configString: string, serialNumber: string): Promise<PowerShellResult> {
+  if (!validateConfigString(configString)) {
+    return { success: false, output: '', error: 'Invalid CA config string' };
+  }
+  // Validate serial number (hex characters and optional spaces/colons)
+  if (!/^[a-fA-F0-9\s:]+$/.test(serialNumber)) {
+    return { success: false, output: '', error: 'Invalid serial number' };
+  }
+
+  return executePowerShell({
+    scriptFile: 'Revoke-Certificate.ps1',
+    parameters: {
+      ConfigString: configString,
+      SerialNumber: serialNumber,
+    },
+    timeout: 30000,
+  });
+}

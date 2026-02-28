@@ -45,6 +45,13 @@ interface NotificationSettings {
     graphClientSecret: string;
     graphCalendarEmail: string;
   };
+  cleanupConfig: {
+    retentionDays: number;
+    digestEnabled: boolean;
+    digestFrequency: 'daily' | 'weekly';
+    digestDay: number;
+    lastDigestSent?: string;
+  };
 }
 
 export default function Settings() {
@@ -599,6 +606,98 @@ export default function Settings() {
                   )}
                 </>
               )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Cleanup Configuration */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>Certificate Cleanup</Typography>
+              <Divider sx={{ mb: 2 }} />
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="number"
+                    label="Retention Period (days)"
+                    value={formData?.cleanupConfig?.retentionDays ?? 90}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (formData && val >= 1) {
+                        setFormData({
+                          ...formData,
+                          cleanupConfig: { ...formData.cleanupConfig, retentionDays: val },
+                        });
+                      }
+                    }}
+                    helperText="Expired certificates older than this become eligible for cleanup"
+                    inputProps={{ min: 1 }}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={formData?.cleanupConfig?.digestEnabled ?? false}
+                        onChange={(e) => formData && setFormData({
+                          ...formData,
+                          cleanupConfig: { ...formData.cleanupConfig, digestEnabled: e.target.checked },
+                        })}
+                      />
+                    }
+                    label="Send cleanup digest emails to notification recipients"
+                  />
+                </Grid>
+                {formData?.cleanupConfig?.digestEnabled && (
+                  <>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        select
+                        label="Digest Frequency"
+                        value={formData.cleanupConfig?.digestFrequency ?? 'weekly'}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          cleanupConfig: { ...formData.cleanupConfig, digestFrequency: e.target.value as 'daily' | 'weekly' },
+                        })}
+                        SelectProps={{ native: true }}
+                      >
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                      </TextField>
+                    </Grid>
+                    {formData.cleanupConfig?.digestFrequency === 'weekly' && (
+                      <Grid item xs={12} sm={6}>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          select
+                          label="Day of Week"
+                          value={formData.cleanupConfig?.digestDay ?? 1}
+                          onChange={(e) => setFormData({
+                            ...formData,
+                            cleanupConfig: { ...formData.cleanupConfig, digestDay: parseInt(e.target.value, 10) },
+                          })}
+                          SelectProps={{ native: true }}
+                        >
+                          <option value={0}>Sunday</option>
+                          <option value={1}>Monday</option>
+                          <option value={2}>Tuesday</option>
+                          <option value={3}>Wednesday</option>
+                          <option value={4}>Thursday</option>
+                          <option value={5}>Friday</option>
+                          <option value={6}>Saturday</option>
+                        </TextField>
+                      </Grid>
+                    )}
+                  </>
+                )}
+              </Grid>
             </CardContent>
           </Card>
         </Grid>

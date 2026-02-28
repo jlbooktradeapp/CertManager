@@ -35,6 +35,13 @@ export interface INotificationSettings extends Document {
     graphClientSecret: string;
     graphCalendarEmail: string;
   };
+  cleanupConfig: {
+    retentionDays: number;
+    digestEnabled: boolean;
+    digestFrequency: 'daily' | 'weekly';
+    digestDay: number;
+    lastDigestSent?: Date;
+  };
 }
 
 const ThresholdSchema = new Schema<IThreshold>({
@@ -100,6 +107,13 @@ const NotificationSettingsSchema = new Schema<INotificationSettings>({
     graphClientId: { type: String, default: '' },
     graphClientSecret: { type: String, default: '' },
     graphCalendarEmail: { type: String, default: '' },
+  },
+  cleanupConfig: {
+    retentionDays: { type: Number, default: 90, min: 1 },
+    digestEnabled: { type: Boolean, default: false },
+    digestFrequency: { type: String, enum: ['daily', 'weekly'], default: 'weekly' },
+    digestDay: { type: Number, default: 1, min: 0, max: 6 }, // 0=Sunday, 1=Monday
+    lastDigestSent: { type: Date },
   },
 }, {
   timestamps: true,

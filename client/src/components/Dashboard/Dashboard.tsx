@@ -21,6 +21,7 @@ import {
   Error as ErrorIcon,
   CheckCircle as CheckIcon,
   Sync as SyncIcon,
+  Replay as ReissuedIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
@@ -102,7 +103,7 @@ export default function Dashboard() {
 
       <Grid container spacing={3}>
         {/* Stats Cards - Clickable */}
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={2.4}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates')}>
               <CardContent>
@@ -118,7 +119,7 @@ export default function Dashboard() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={2.4}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=active')}>
               <CardContent>
@@ -129,32 +130,32 @@ export default function Dashboard() {
                   </Typography>
                 </Box>
                 <Typography variant="h4" color="success.main">
-                  {stats?.active || 0}
+                  {(stats?.active || 0) - (stats?.expiringIn30Days || 0)}
                 </Typography>
               </CardContent>
             </CardActionArea>
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={2.4}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=expiring&maxDays=30')}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                   <WarningIcon color="warning" />
                   <Typography variant="subtitle2" color="textSecondary">
-                    Expiring (30 days)
+                    Expiring (7-30 days)
                   </Typography>
                 </Box>
                 <Typography variant="h4" color="warning.main">
-                  {stats?.expiringIn30Days || 0}
+                  {(stats?.expiringIn30Days || 0) - (stats?.expiringIn7Days || 0)}
                 </Typography>
               </CardContent>
             </CardActionArea>
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={2.4}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=expiring&maxDays=7')}>
               <CardContent>
@@ -166,6 +167,24 @@ export default function Dashboard() {
                 </Box>
                 <Typography variant="h4" color="error.main">
                   {stats?.expiringIn7Days || 0}
+                </Typography>
+              </CardContent>
+            </CardActionArea>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={2.4}>
+          <Card>
+            <CardActionArea onClick={() => navigate('/certificates?status=reissued')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <ReissuedIcon color="info" />
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Reissued
+                  </Typography>
+                </Box>
+                <Typography variant="h4" color="info.main">
+                  {stats?.reissued || 0}
                 </Typography>
               </CardContent>
             </CardActionArea>
@@ -186,15 +205,31 @@ export default function Dashboard() {
                       data={chartData}
                       cx="50%"
                       cy="45%"
-                      innerRadius={65}
-                      outerRadius={110}
+                      innerRadius={55}
+                      outerRadius={95}
                       paddingAngle={2}
+                      minAngle={15}
                       dataKey="value"
-                      label={({ name, value, x, y, textAnchor }) => (
-                        <text x={x} y={y} textAnchor={textAnchor} fill="#fff" fontSize={13}>
-                          {`${name}: ${value}`}
-                        </text>
-                      )}
+                      label={({ cx, cy, midAngle, outerRadius: or, name, value, index }) => {
+                        const RADIAN = Math.PI / 180;
+                        const radius = or + 28;
+                        const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                        const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                        return (
+                          <text
+                            x={x}
+                            y={y}
+                            fill={COLORS[index % COLORS.length]}
+                            textAnchor={x > cx ? 'start' : 'end'}
+                            dominantBaseline="central"
+                            fontSize={12}
+                            fontWeight={600}
+                          >
+                            {`${name}: ${value}`}
+                          </text>
+                        );
+                      }}
+                      labelLine={{ stroke: '#999', strokeWidth: 1 }}
                       onClick={handlePieClick}
                       style={{ cursor: 'pointer' }}
                     >

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { NotificationSettings } from '../models/NotificationSettings';
-import { sendTestEmail } from '../services/notificationService';
+import { sendTestEmail, sendExpirationNotifications } from '../services/notificationService';
 import { syncCertificatesToCalendar } from '../services/calendarService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -145,6 +145,17 @@ export async function testNotificationEmail(req: AuthenticatedRequest, res: Resp
   } catch (error) {
     logger.error('Test email error:', error);
     res.status(500).json({ error: 'Failed to send test email' });
+  }
+}
+
+export async function triggerNotifications(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    logger.info(`Manual notification trigger by ${req.user?.username}`);
+    const result = await sendExpirationNotifications();
+    res.json(result);
+  } catch (error) {
+    logger.error('Manual notification trigger error:', error);
+    res.status(500).json({ error: 'Failed to run notifications' });
   }
 }
 

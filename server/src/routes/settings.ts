@@ -3,6 +3,7 @@ import {
   getNotificationSettings,
   updateNotificationSettings,
   testNotificationEmail,
+  triggerNotifications,
   syncCalendar,
   getSyncSettings,
   updateSyncSettings,
@@ -23,6 +24,9 @@ router.put('/notifications', adminOnly, updateNotificationSettings);
 
 // POST /api/settings/notifications/test - Send test email
 router.post('/notifications/test', adminOnly, testNotificationEmail);
+
+// POST /api/settings/notifications/trigger - Manually trigger notification job
+router.post('/notifications/trigger', adminOnly, triggerNotifications);
 
 // POST /api/settings/calendar/sync - Sync certificates to Teams calendar
 router.post('/calendar/sync', adminOnly, syncCalendar);

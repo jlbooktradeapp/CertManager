@@ -22,11 +22,12 @@ import api from '../../services/api';
 import { Certificate } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
-const statusColors: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
+const statusColors: Record<string, 'success' | 'warning' | 'error' | 'default' | 'info'> = {
   active: 'success',
   expiring: 'warning',
   expired: 'error',
   revoked: 'default',
+  reissued: 'info',
 };
 
 export default function CertificateList() {
@@ -76,10 +77,11 @@ export default function CertificateList() {
   });
 
   const handleStatusChange = (_: React.MouseEvent<HTMLElement>, newStatus: string | null) => {
-    setStatus(newStatus);
+    const effectiveStatus = newStatus === 'all' ? null : newStatus;
+    setStatus(effectiveStatus);
     const newParams = new URLSearchParams(searchParams);
-    if (newStatus) {
-      newParams.set('status', newStatus);
+    if (effectiveStatus) {
+      newParams.set('status', effectiveStatus);
     } else {
       newParams.delete('status');
     }
@@ -185,14 +187,16 @@ export default function CertificateList() {
         />
 
         <ToggleButtonGroup
-          value={status}
+          value={status || 'all'}
           exclusive
           onChange={handleStatusChange}
           size="small"
         >
+          <ToggleButton value="all">All</ToggleButton>
           <ToggleButton value="active">Active</ToggleButton>
           <ToggleButton value="expiring">Expiring</ToggleButton>
           <ToggleButton value="expired">Expired</ToggleButton>
+          <ToggleButton value="reissued">Reissued</ToggleButton>
           <ToggleButton value="revoked">Revoked</ToggleButton>
         </ToggleButtonGroup>
 

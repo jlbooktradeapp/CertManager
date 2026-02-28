@@ -12,6 +12,7 @@ import ServerList from './components/Servers/ServerList';
 import Settings from './components/Settings/Settings';
 import ApplicationList from './components/Applications/ApplicationList';
 import ApplicationDetail from './components/Applications/ApplicationDetail';
+import Cleanup from './components/Cleanup/Cleanup';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -78,6 +79,7 @@ function App() {
         <Route path="servers" element={<ServerList />} />
         <Route path="applications" element={<ApplicationList />} />
         <Route path="applications/:id" element={<ApplicationDetail />} />
+        <Route path="cleanup" element={<OperatorRoute><Cleanup /></OperatorRoute>} />
         <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
       </Route>
     </Routes>

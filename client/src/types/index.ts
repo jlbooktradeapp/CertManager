@@ -37,7 +37,7 @@ export interface Certificate {
   keySize?: number;
   encryptionType?: string;
   templateName?: string;
-  status: 'active' | 'expiring' | 'expired' | 'revoked';
+  status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued';
   deployedTo: {
     serverId: string;
     serverName: string;
@@ -163,6 +163,7 @@ export interface CertificateStats {
   expiring: number;
   expired: number;
   revoked: number;
+  reissued: number;
   expiringIn30Days: number;
   expiringIn7Days: number;
 }

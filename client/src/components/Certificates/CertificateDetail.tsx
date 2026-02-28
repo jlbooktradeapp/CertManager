@@ -29,6 +29,7 @@ import {
   Person as PersonIcon,
   Business as VendorIcon,
   Clear as ClearIcon,
+  Replay as ReissuedIcon,
 } from '@mui/icons-material';
 import { format, differenceInDays } from 'date-fns';
 import { useState } from 'react';
@@ -37,11 +38,12 @@ import api from '../../services/api';
 import { Application, PaginatedResponse } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
-const statusColors: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
+const statusColors: Record<string, 'success' | 'warning' | 'error' | 'default' | 'info'> = {
   active: 'success',
   expiring: 'warning',
   expired: 'error',
   revoked: 'default',
+  reissued: 'info',
 };
 
 export default function CertificateDetail() {
@@ -93,6 +95,15 @@ export default function CertificateDetail() {
     },
   });
 
+  const markReissuedMutation = useMutation({
+    mutationFn: () => updateCertificate(id!, { status: 'reissued' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['certificate', id] });
+      queryClient.invalidateQueries({ queryKey: ['certificates'] });
+      queryClient.invalidateQueries({ queryKey: ['certificateStats'] });
+    },
+  });
+
   const handleAddRecipient = () => {
     const email = newEmail.trim();
     if (!email) return;
@@ -137,6 +148,21 @@ export default function CertificateDetail() {
           {cert.commonName}
         </Typography>
         <Chip label={cert.status} color={statusColors[cert.status]} sx={{ textTransform: 'capitalize' }} />
+        {isOperator && cert.status !== 'reissued' && (
+          <Button
+            color="info"
+            variant="outlined"
+            startIcon={<ReissuedIcon />}
+            onClick={() => {
+              if (confirm(`Mark "${cert.commonName}" as reissued? This will flag it for cleanup.`)) {
+                markReissuedMutation.mutate();
+              }
+            }}
+            disabled={markReissuedMutation.isPending}
+          >
+            Mark Reissued
+          </Button>
+        )}
         {isOperator && (
           <Button color="error" startIcon={<DeleteIcon />} onClick={() => setDeleteDialogOpen(true)}>
             Remove

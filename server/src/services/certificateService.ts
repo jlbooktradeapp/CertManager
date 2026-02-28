@@ -9,6 +9,7 @@ export interface CertificateStats {
   expiring: number;
   expired: number;
   revoked: number;
+  reissued: number;
   expiringIn30Days: number;
   expiringIn7Days: number;
 }
@@ -30,6 +31,7 @@ export async function getCertificateStats(excludeTemplates?: string[]): Promise<
     expiring,
     expired,
     revoked,
+    reissued,
     expiringIn30Days,
     expiringIn7Days,
   ] = await Promise.all([
@@ -38,14 +40,15 @@ export async function getCertificateStats(excludeTemplates?: string[]): Promise<
     Certificate.countDocuments({ ...base, status: 'expiring' }),
     Certificate.countDocuments({ ...base, status: 'expired' }),
     Certificate.countDocuments({ ...base, status: 'revoked' }),
+    Certificate.countDocuments({ ...base, status: 'reissued' }),
     Certificate.countDocuments({
       ...base,
-      status: { $nin: ['expired', 'revoked'] },
+      status: { $nin: ['expired', 'revoked', 'reissued'] },
       validTo: { $gte: now, $lte: in30Days },
     }),
     Certificate.countDocuments({
       ...base,
-      status: { $nin: ['expired', 'revoked'] },
+      status: { $nin: ['expired', 'revoked', 'reissued'] },
       validTo: { $gte: now, $lte: in7Days },
     }),
   ]);
@@ -56,6 +59,7 @@ export async function getCertificateStats(excludeTemplates?: string[]): Promise<
     expiring,
     expired,
     revoked,
+    reissued,
     expiringIn30Days,
     expiringIn7Days,
   };
@@ -65,10 +69,10 @@ export async function updateCertificateStatuses(): Promise<number> {
   const now = new Date();
   const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-  // Mark expired certificates
+  // Mark expired certificates (but don't override 'reissued' or 'revoked')
   const expiredResult = await Certificate.updateMany(
     {
-      status: { $nin: ['expired', 'revoked'] },
+      status: { $nin: ['expired', 'revoked', 'reissued'] },
       validTo: { $lt: now },
     },
     { $set: { status: 'expired' } }
@@ -92,6 +96,10 @@ export async function updateCertificateStatuses(): Promise<number> {
     { $set: { status: 'active' } }
   );
 
+  // Update reissued certs that have expired to 'reissued' (keep reissued, don't flip to expired)
+  // This ensures reissued stays as reissued even after expiration
+  // No action needed — reissued status is preserved by the $nin above
+
   const totalUpdated =
     (expiredResult.modifiedCount || 0) +
     (expiringResult.modifiedCount || 0) +
@@ -102,6 +110,83 @@ export async function updateCertificateStatuses(): Promise<number> {
   }
 
   return totalUpdated;
+}
+
+/**
+ * Detect reissued certificates by grouping on commonName + SANs.
+ * Within each group, the cert with the latest validTo is the "current" one.
+ * All older certs are marked as 'reissued'.
+ */
+export async function detectReissuedCertificates(): Promise<number> {
+  let markedCount = 0;
+
+  // Aggregation: group by commonName + sorted SANs, find groups with 2+ certs
+  const groups = await Certificate.aggregate([
+    // Only consider non-revoked certs
+    { $match: { status: { $ne: 'revoked' } } },
+    // Sort SANs for consistent grouping
+    {
+      $addFields: {
+        sanKey: {
+          $cond: {
+            if: { $gt: [{ $size: { $ifNull: ['$subjectAlternativeNames', []] } }, 0] },
+            then: {
+              $reduce: {
+                input: { $sortArray: { input: { $ifNull: ['$subjectAlternativeNames', []] }, sortBy: 1 } },
+                initialValue: '',
+                in: { $concat: ['$$value', '|', '$$this'] },
+              },
+            },
+            else: '',
+          },
+        },
+      },
+    },
+    // Group by CN + SAN key
+    {
+      $group: {
+        _id: { cn: '$commonName', sans: '$sanKey' },
+        certs: {
+          $push: {
+            _id: '$_id',
+            validTo: '$validTo',
+            status: '$status',
+          },
+        },
+        count: { $sum: 1 },
+      },
+    },
+    // Only groups with duplicates
+    { $match: { count: { $gt: 1 } } },
+  ]);
+
+  for (const group of groups) {
+    // Sort by validTo descending — newest first
+    const sorted = group.certs.sort(
+      (a: any, b: any) => new Date(b.validTo).getTime() - new Date(a.validTo).getTime()
+    );
+
+    // The first one (newest validTo) is the current cert — skip it
+    // All others are reissued
+    const reissuedIds = sorted
+      .slice(1)
+      .filter((c: any) => c.status !== 'reissued')
+      .map((c: any) => c._id);
+
+    if (reissuedIds.length > 0) {
+      const result = await Certificate.updateMany(
+        { _id: { $in: reissuedIds } },
+        { $set: { status: 'reissued' } }
+      );
+      markedCount += result.modifiedCount || 0;
+    }
+  }
+
+  if (markedCount > 0) {
+    logger.info(`Marked ${markedCount} certificates as reissued`);
+  }
+
+  return markedCount;
 }
 
 export async function syncAllCAs(): Promise<void> {
@@ -117,6 +202,9 @@ export async function syncAllCAs(): Promise<void> {
 
   // Update all certificate statuses after sync
   await updateCertificateStatuses();
+
+  // Detect reissued certificates (same CN + SANs)
+  await detectReissuedCertificates();
 }
 
 // Replace the syncCA function (around line 114) in certificateService.ts with this:
@@ -248,7 +336,7 @@ export async function getExpiringCertificates(days: number = 30): Promise<ICerti
   const futureDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 
   return Certificate.find({
-    status: { $nin: ['expired', 'revoked'] },
+    status: { $nin: ['expired', 'revoked', 'reissued'] },
     validTo: { $gte: now, $lte: futureDate },
   })
     .sort({ validTo: 1 })

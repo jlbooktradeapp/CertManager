@@ -59,7 +59,7 @@ export async function deleteCertificate(id: string) {
   return response.data;
 }
 
-export async function updateCertificate(id: string, data: { notificationRecipients?: string[]; applicationId?: string | null }) {
+export async function updateCertificate(id: string, data: { notificationRecipients?: string[]; applicationId?: string | null; status?: string }) {
   const response = await api.put<Certificate>(`/certificates/${id}`, data);
   return response.data;
 }

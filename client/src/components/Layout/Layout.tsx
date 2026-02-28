@@ -30,6 +30,7 @@ import {
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
   Apps as AppsIcon,
+  DeleteSweep as CleanupIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../context/AuthContext';
 import { useThemeMode } from '../../context/ThemeContext';
@@ -43,6 +44,7 @@ const menuItems = [
   { text: 'CSR Requests', icon: <CSRIcon />, path: '/csr' },
   { text: 'Servers', icon: <ServerIcon />, path: '/servers' },
   { text: 'Applications', icon: <AppsIcon />, path: '/applications' },
+  { text: 'Cleanup', icon: <CleanupIcon />, path: '/cleanup' },
 ];
 
 export default function Layout() {

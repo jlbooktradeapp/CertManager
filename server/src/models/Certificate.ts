@@ -41,7 +41,7 @@ export interface ICertificate extends Document {
   keySize?: number;
   encryptionType?: string;
   templateName?: string;
-  status: 'active' | 'expiring' | 'expired' | 'revoked';
+  status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued';
   deployedTo: IDeployment[];
   notificationsSent: INotificationSent[];
   notificationRecipients: string[];
@@ -103,7 +103,7 @@ const CertificateSchema = new Schema<ICertificate>({
   templateName: String,
   status: {
     type: String,
-    enum: ['active', 'expiring', 'expired', 'revoked'],
+    enum: ['active', 'expiring', 'expired', 'revoked', 'reissued'],
     default: 'active',
     index: true,
   },

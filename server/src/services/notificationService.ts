@@ -1,4 +1,3 @@
-import nodemailer from 'nodemailer';
 import { createMailTransporter, getMailConfig } from '../config/mail';
 import { Certificate, ICertificate } from '../models/Certificate';
 import { Application } from '../models/Application';
@@ -23,6 +22,10 @@ export interface NotificationResult {
   errors: string[];
 }
 
+/**
+ * Main entry point called by the scheduler.
+ * Runs both the owner/vendor per-cert notifications and the admin daily digest.
+ */
 export async function sendExpirationNotifications(): Promise<NotificationResult> {
   const result: NotificationResult = {
     success: true,
@@ -39,79 +42,18 @@ export async function sendExpirationNotifications(): Promise<NotificationResult>
       return result;
     }
 
-    const enabledThresholds = settings.thresholds
-      .filter(t => t.enabled)
-      .map(t => t.days)
-      .sort((a, b) => b - a);
+    // 1. Send per-cert threshold emails to app owners/vendors
+    const ownerResult = await sendOwnerNotifications(settings);
+    result.sent += ownerResult.sent;
+    result.failed += ownerResult.failed;
+    result.errors.push(...ownerResult.errors);
 
-    if (enabledThresholds.length === 0) {
-      logger.info('No notification thresholds enabled');
-      return result;
-    }
+    // 2. Send daily digest to global admin recipients
+    const digestResult = await sendAdminDigest(settings);
+    result.sent += digestResult.sent;
+    result.failed += digestResult.failed;
+    result.errors.push(...digestResult.errors);
 
-    // Get recipients
-    const recipients = await resolveRecipients(settings.recipients);
-
-    if (recipients.length === 0) {
-      logger.warn('No notification recipients configured');
-      return result;
-    }
-
-    // Check each threshold
-    for (const days of enabledThresholds) {
-      const expiringCerts = await findCertificatesExpiringInDays(days);
-
-      for (const cert of expiringCerts) {
-        // Check if notification was already sent for this threshold
-        const alreadySent = cert.notificationsSent.some(
-          n => n.type === `${days}day` as any
-        );
-
-        if (alreadySent) {
-          continue;
-        }
-
-        try {
-          // Merge global + per-certificate + application owner/vendor recipients
-          const mergedRecipients = [
-            ...recipients,
-            ...(cert.notificationRecipients || []),
-          ];
-
-          // Add application owner and vendor contact emails
-          if (cert.applicationId) {
-            const app = await Application.findById(cert.applicationId);
-            if (app) {
-              for (const owner of app.owners) {
-                if (owner.email) mergedRecipients.push(owner.email);
-              }
-              if (app.vendor?.contactEmail) {
-                mergedRecipients.push(app.vendor.contactEmail);
-              }
-            }
-          }
-
-          const allRecipients = [...new Set(mergedRecipients)];
-
-          await sendExpirationEmail(cert, days, allRecipients, settings);
-
-          // Record that notification was sent
-          cert.notificationsSent.push({
-            type: `${days}day` as any,
-            sentAt: new Date(),
-            recipients: allRecipients,
-          });
-          await cert.save();
-
-          result.sent++;
-          logger.info(`Sent ${days}-day expiration notice for ${cert.commonName}`);
-        } catch (error) {
-          result.failed++;
-          result.errors.push(`Failed to send for ${cert.commonName}: ${error}`);
-          logger.error(`Failed to send notification for ${cert.commonName}:`, error);
-        }
-      }
-    }
   } catch (error) {
     result.success = false;
     result.errors.push(`Notification job error: ${error}`);
@@ -121,19 +63,442 @@ export async function sendExpirationNotifications(): Promise<NotificationResult>
   return result;
 }
 
-async function findCertificatesExpiringInDays(days: number): Promise<ICertificate[]> {
+// ─── OWNER/VENDOR PER-CERT NOTIFICATIONS ──────────────────────────────────────
+
+/**
+ * Send individual expiration emails to per-certificate recipients and
+ * application owners/vendors at configured thresholds.
+ * Global recipients are NOT included — they get the admin digest instead.
+ */
+async function sendOwnerNotifications(settings: any): Promise<NotificationResult> {
+  const result: NotificationResult = { success: true, sent: 0, failed: 0, errors: [] };
+
+  const enabledThresholds = settings.thresholds
+    .filter((t: any) => t.enabled)
+    .map((t: any) => t.days)
+    .sort((a: number, b: number) => b - a);
+
+  if (enabledThresholds.length === 0) {
+    logger.info('No notification thresholds enabled');
+    return result;
+  }
+
+  const excludedTemplates = settings.excludedTemplates || [];
+
+  for (const days of enabledThresholds) {
+    const expiringCerts = await findCertificatesExpiringInDays(days, excludedTemplates);
+
+    for (const cert of expiringCerts) {
+      // Check if notification was already sent for this threshold
+      const alreadySent = cert.notificationsSent.some(
+        (n: any) => n.type === `${days}day`
+      );
+
+      if (alreadySent) {
+        continue;
+      }
+
+      // Build recipient list: per-cert recipients + app owner/vendor (NO global recipients)
+      const certRecipients: string[] = [...(cert.notificationRecipients || [])];
+
+      if (cert.applicationId) {
+        const app = await Application.findById(cert.applicationId);
+        if (app) {
+          for (const owner of app.owners) {
+            if (owner.email) certRecipients.push(owner.email);
+          }
+          if (app.vendor?.contactEmail) {
+            certRecipients.push(app.vendor.contactEmail);
+          }
+        }
+      }
+
+      const allRecipients = [...new Set(certRecipients)];
+
+      // Skip if no per-cert recipients (admins get the digest instead)
+      if (allRecipients.length === 0) {
+        continue;
+      }
+
+      try {
+        await sendOwnerExpirationEmail(cert, days, allRecipients, settings);
+
+        // Record that notification was sent
+        cert.notificationsSent.push({
+          type: `${days}day` as any,
+          sentAt: new Date(),
+          recipients: allRecipients,
+        });
+        await cert.save();
+
+        result.sent++;
+        logger.info(`Sent ${days}-day owner notification for ${cert.commonName} to ${allRecipients.length} recipients`);
+      } catch (error) {
+        result.failed++;
+        result.errors.push(`Failed to send owner notification for ${cert.commonName}: ${error}`);
+        logger.error(`Failed to send owner notification for ${cert.commonName}:`, error);
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Find certificates expiring within a given day window.
+ * Excludes revoked, reissued, and excluded templates.
+ */
+async function findCertificatesExpiringInDays(days: number, excludedTemplates: string[]): Promise<ICertificate[]> {
   const now = new Date();
   const targetDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
   const previousDay = new Date(now.getTime() + (days - 1) * 24 * 60 * 60 * 1000);
 
-  return Certificate.find({
-    status: { $ne: 'revoked' },
+  const query: any = {
+    status: { $nin: ['revoked', 'reissued'] },
     validTo: {
       $gte: previousDay,
       $lte: targetDate,
     },
+  };
+
+  if (excludedTemplates.length > 0) {
+    query.templateName = { $nin: excludedTemplates };
+  }
+
+  return Certificate.find(query);
+}
+
+/**
+ * Send an individual expiration email for a specific certificate.
+ */
+async function sendOwnerExpirationEmail(
+  cert: ICertificate,
+  days: number,
+  recipients: string[],
+  settings: any
+): Promise<void> {
+  const transporter = createMailTransporter();
+  const config = getMailConfig();
+
+  const severity = days <= 7 ? 'CRITICAL' : days <= 30 ? 'WARNING' : 'INFO';
+  const subject = `[${severity}] Certificate Expiring in ${days} Days: ${cert.commonName}`;
+
+  const appName = cert.applicationId
+    ? (await Application.findById(cert.applicationId))?.name || 'Unknown'
+    : 'Not Assigned';
+
+  const html = `
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+      <h2 style="color: ${severity === 'CRITICAL' ? '#d32f2f' : severity === 'WARNING' ? '#f57c00' : '#1976d2'}">
+        Certificate Expiration Notice
+      </h2>
+
+      <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Certificate</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.commonName)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Serial Number</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.serialNumber)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Application</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(appName)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Expiration Date</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Days Remaining</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${days}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Issuing CA</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
+        </tr>
+      </table>
+
+      <p style="margin-top: 20px;">
+        Please renew this certificate before it expires to prevent service disruption.
+      </p>
+
+      <p style="color: #666; font-size: 12px; margin-top: 30px;">
+        This is an automated message from Certificate Manager.
+      </p>
+    </body>
+    </html>
+  `;
+
+  await transporter.sendMail({
+    from: config.from,
+    to: recipients.join(', '),
+    subject,
+    html,
   });
 }
+
+// ─── ADMIN DAILY DIGEST ───────────────────────────────────────────────────────
+
+/**
+ * Send a single daily digest email to global (admin) recipients.
+ * Contains three sections: Critical (≤7 days), Expiring (7-30 days),
+ * and Recently Reissued (last 7 days).
+ */
+async function sendAdminDigest(settings: any): Promise<NotificationResult> {
+  const result: NotificationResult = { success: true, sent: 0, failed: 0, errors: [] };
+
+  // Resolve global recipients only
+  const adminRecipients = await resolveRecipients(settings.recipients);
+
+  if (adminRecipients.length === 0) {
+    logger.info('No global recipients configured for admin digest');
+    return result;
+  }
+
+  const excludedTemplates = settings.excludedTemplates || [];
+  const now = new Date();
+
+  // Build template exclusion filter
+  const templateFilter: any = excludedTemplates.length > 0
+    ? { templateName: { $nin: excludedTemplates } }
+    : {};
+
+  // Critical: expiring within 7 days (not yet expired)
+  const criticalCerts = await Certificate.find({
+    status: { $nin: ['revoked', 'reissued'] },
+    validTo: {
+      $gte: now,
+      $lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+    },
+    ...templateFilter,
+  }).sort({ validTo: 1 });
+
+  // Expiring: expiring in 7-30 days
+  const expiringCerts = await Certificate.find({
+    status: { $nin: ['revoked', 'reissued'] },
+    validTo: {
+      $gt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      $lte: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    },
+    ...templateFilter,
+  }).sort({ validTo: 1 });
+
+  // Recently reissued: marked as reissued in the last 7 days
+  const reissuedCerts = await Certificate.find({
+    status: 'reissued',
+    updatedAt: {
+      $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
+    },
+    ...templateFilter,
+  }).sort({ updatedAt: -1 }).limit(50);
+
+  // Skip sending if there's nothing to report
+  if (criticalCerts.length === 0 && expiringCerts.length === 0 && reissuedCerts.length === 0) {
+    logger.info('Admin digest: nothing to report');
+    return result;
+  }
+
+  try {
+    await sendDigestEmail(adminRecipients, criticalCerts, expiringCerts, reissuedCerts);
+    result.sent++;
+    logger.info(`Sent admin digest to ${adminRecipients.length} recipients (${criticalCerts.length} critical, ${expiringCerts.length} expiring, ${reissuedCerts.length} reissued)`);
+  } catch (error) {
+    result.failed++;
+    result.errors.push(`Failed to send admin digest: ${error}`);
+    logger.error('Failed to send admin digest:', error);
+  }
+
+  return result;
+}
+
+/**
+ * Build and send the digest email.
+ */
+async function sendDigestEmail(
+  recipients: string[],
+  criticalCerts: ICertificate[],
+  expiringCerts: ICertificate[],
+  reissuedCerts: ICertificate[]
+): Promise<void> {
+  const transporter = createMailTransporter();
+  const config = getMailConfig();
+
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  // Determine subject severity
+  let subjectPrefix = 'INFO';
+  if (criticalCerts.length > 0) {
+    subjectPrefix = 'CRITICAL';
+  } else if (expiringCerts.length > 0) {
+    subjectPrefix = 'WARNING';
+  }
+
+  const subject = `[${subjectPrefix}] Certificate Manager Daily Digest - ${today}`;
+
+  // Preload application names for all certs
+  const appIds = [...criticalCerts, ...expiringCerts, ...reissuedCerts]
+    .filter(c => c.applicationId)
+    .map(c => c.applicationId);
+  const apps = appIds.length > 0
+    ? await Application.find({ _id: { $in: appIds } })
+    : [];
+  const appMap = new Map(apps.map(a => [a._id.toString(), a.name]));
+
+  const getAppName = (cert: ICertificate) => {
+    if (!cert.applicationId) return '';
+    return appMap.get(cert.applicationId.toString()) || '';
+  };
+
+  const buildCertRow = (cert: ICertificate, showDays: boolean = true) => {
+    const daysLeft = Math.ceil((cert.validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const appName = getAppName(cert);
+    const daysColor = daysLeft <= 7 ? '#d32f2f' : '#f57c00';
+
+    return `
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.commonName)}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.templateName || 'N/A')}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(appName || 'Not Assigned')}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
+        ${showDays ? `<td style="padding: 6px 10px; border: 1px solid #ddd; color: ${daysColor}; font-weight: bold;">${daysLeft}d</td>` : ''}
+      </tr>
+    `;
+  };
+
+  const buildReissuedRow = (cert: ICertificate) => {
+    const appName = getAppName(cert);
+    return `
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.commonName)}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.templateName || 'N/A')}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(appName || 'Not Assigned')}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
+      </tr>
+    `;
+  };
+
+  const tableHeaderStyle = 'padding: 8px 10px; border: 1px solid #ddd; background-color: #f5f5f5; font-weight: bold; text-align: left;';
+
+  let html = `
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+      <h2 style="color: #1976d2; margin-bottom: 5px;">Certificate Manager Daily Digest</h2>
+      <p style="color: #666; margin-top: 0;">${today}</p>
+
+      <table style="margin-bottom: 20px;">
+        <tr>
+          <td style="padding: 4px 12px; font-weight: bold;">Critical (≤ 7 days):</td>
+          <td style="padding: 4px 12px; color: ${criticalCerts.length > 0 ? '#d32f2f' : '#4caf50'}; font-weight: bold;">${criticalCerts.length}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 12px; font-weight: bold;">Expiring (7-30 days):</td>
+          <td style="padding: 4px 12px; color: ${expiringCerts.length > 0 ? '#f57c00' : '#4caf50'}; font-weight: bold;">${expiringCerts.length}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 12px; font-weight: bold;">Recently Reissued:</td>
+          <td style="padding: 4px 12px; color: #1976d2; font-weight: bold;">${reissuedCerts.length}</td>
+        </tr>
+      </table>
+  `;
+
+  // Critical section
+  if (criticalCerts.length > 0) {
+    html += `
+      <h3 style="color: #d32f2f; border-bottom: 2px solid #d32f2f; padding-bottom: 4px;">
+        🔴 Critical — Expiring Within 7 Days (${criticalCerts.length})
+      </h3>
+      <table style="border-collapse: collapse; width: 100%; margin-bottom: 24px;">
+        <thead>
+          <tr>
+            <th style="${tableHeaderStyle}">Common Name</th>
+            <th style="${tableHeaderStyle}">Issuing CA</th>
+            <th style="${tableHeaderStyle}">Template</th>
+            <th style="${tableHeaderStyle}">Application</th>
+            <th style="${tableHeaderStyle}">Expires</th>
+            <th style="${tableHeaderStyle}">Days Left</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${criticalCerts.map(c => buildCertRow(c, true)).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // Expiring section
+  if (expiringCerts.length > 0) {
+    html += `
+      <h3 style="color: #f57c00; border-bottom: 2px solid #f57c00; padding-bottom: 4px;">
+        🟠 Expiring — Within 7-30 Days (${expiringCerts.length})
+      </h3>
+      <table style="border-collapse: collapse; width: 100%; margin-bottom: 24px;">
+        <thead>
+          <tr>
+            <th style="${tableHeaderStyle}">Common Name</th>
+            <th style="${tableHeaderStyle}">Issuing CA</th>
+            <th style="${tableHeaderStyle}">Template</th>
+            <th style="${tableHeaderStyle}">Application</th>
+            <th style="${tableHeaderStyle}">Expires</th>
+            <th style="${tableHeaderStyle}">Days Left</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${expiringCerts.map(c => buildCertRow(c, true)).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  // Reissued section
+  if (reissuedCerts.length > 0) {
+    html += `
+      <h3 style="color: #1976d2; border-bottom: 2px solid #1976d2; padding-bottom: 4px;">
+        🔵 Recently Reissued — Last 7 Days (${reissuedCerts.length})
+      </h3>
+      <table style="border-collapse: collapse; width: 100%; margin-bottom: 24px;">
+        <thead>
+          <tr>
+            <th style="${tableHeaderStyle}">Common Name</th>
+            <th style="${tableHeaderStyle}">Issuing CA</th>
+            <th style="${tableHeaderStyle}">Template</th>
+            <th style="${tableHeaderStyle}">Application</th>
+            <th style="${tableHeaderStyle}">Expired</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${reissuedCerts.map(c => buildReissuedRow(c)).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  html += `
+      <p style="color: #666; font-size: 12px; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 10px;">
+        This is an automated daily digest from Certificate Manager.
+      </p>
+    </body>
+    </html>
+  `;
+
+  await transporter.sendMail({
+    from: config.from,
+    to: recipients.join(', '),
+    subject,
+    html,
+  });
+}
+
+// ─── SHARED UTILITIES ─────────────────────────────────────────────────────────
 
 async function resolveRecipients(
   recipients: { type: string; value: string }[]
@@ -163,75 +528,6 @@ async function resolveRecipients(
   }
 
   return Array.from(emails);
-}
-
-async function sendExpirationEmail(
-  cert: ICertificate,
-  days: number,
-  recipients: string[],
-  settings: any
-): Promise<void> {
-  const transporter = createMailTransporter();
-  const config = getMailConfig();
-
-  const severity = days <= 7 ? 'CRITICAL' : days <= 30 ? 'WARNING' : 'INFO';
-  const subject = `[${severity}] Certificate Expiring in ${days} Days: ${cert.commonName}`;
-
-  const deployedServers = cert.deployedTo
-    .map(d => escapeHtml(d.serverName))
-    .join(', ') || 'Unknown';
-
-  const html = `
-    <html>
-    <body style="font-family: Arial, sans-serif; padding: 20px;">
-      <h2 style="color: ${severity === 'CRITICAL' ? '#d32f2f' : severity === 'WARNING' ? '#f57c00' : '#1976d2'}">
-        Certificate Expiration Notice
-      </h2>
-
-      <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Certificate</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.commonName)}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Serial Number</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.serialNumber)}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Expiration Date</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Days Remaining</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${days}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Issuing CA</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Deployed To</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${deployedServers}</td>
-        </tr>
-      </table>
-
-      <p style="margin-top: 20px;">
-        Please renew this certificate before it expires to prevent service disruption.
-      </p>
-
-      <p style="color: #666; font-size: 12px; margin-top: 30px;">
-        This is an automated message from Certificate Manager.
-      </p>
-    </body>
-    </html>
-  `;
-
-  await transporter.sendMail({
-    from: config.from,
-    to: recipients.join(', '),
-    subject,
-    html,
-  });
 }
 
 export async function sendTestEmail(to: string): Promise<boolean> {

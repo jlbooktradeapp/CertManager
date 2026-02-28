@@ -35,9 +35,9 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
       const now = new Date();
       const futureDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
       query.validTo = { $gte: now, $lte: futureDate };
-      // Override status to exclude already expired/revoked
+      // Override status to exclude already expired/revoked/reissued
       if (!status) {
-        query.status = { $nin: ['expired', 'revoked'] };
+        query.status = { $nin: ['expired', 'revoked', 'reissued'] };
       }
     }
 
@@ -119,7 +119,7 @@ export async function getExpiringCertificates(req: Request, res: Response): Prom
     const futureDate = new Date(now.getTime() + daysNum * 24 * 60 * 60 * 1000);
 
     const certificates = await Certificate.find({
-      status: { $nin: ['expired', 'revoked'] },
+      status: { $nin: ['expired', 'revoked', 'reissued'] },
       validTo: { $gte: now, $lte: futureDate },
     })
       .sort({ validTo: 1 })
@@ -176,9 +176,19 @@ export async function triggerSync(req: AuthenticatedRequest, res: Response): Pro
 export async function updateCertificate(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { notificationRecipients, applicationId } = req.body;
+    const { notificationRecipients, applicationId, status } = req.body;
 
     const updates: Record<string, unknown> = {};
+
+    // Allow manual status override (only 'reissued' can be set manually)
+    if (status !== undefined) {
+      const allowedManualStatuses = ['reissued'];
+      if (!allowedManualStatuses.includes(status)) {
+        res.status(400).json({ error: `Status can only be manually set to: ${allowedManualStatuses.join(', ')}` });
+        return;
+      }
+      updates.status = status;
+    }
 
     if (notificationRecipients !== undefined) {
       if (!Array.isArray(notificationRecipients)) {
