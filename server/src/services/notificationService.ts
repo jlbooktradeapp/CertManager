@@ -338,10 +338,10 @@ async function sendDigestEmail(
   if (criticalCerts.length > 0) {
     subjectPrefix = 'CRITICAL';
   } else if (expiringCerts.length > 0) {
-    subjectPrefix = 'WARNING';
+    subjectPrefix = '';
   }
 
-  const subject = `[${subjectPrefix}] Certificate Manager Daily Digest - ${today}`;
+  const subject = `Certificate Manager Daily Digest - ${today}`;
 
   // Preload application names for all certs
   const appIds = [...criticalCerts, ...expiringCerts, ...reissuedCerts]
@@ -350,16 +350,25 @@ async function sendDigestEmail(
   const apps = appIds.length > 0
     ? await Application.find({ _id: { $in: appIds } })
     : [];
-  const appMap = new Map(apps.map(a => [a._id.toString(), a.name]));
+  const appMap = new Map(apps.map(a => [a._id.toString(), a]));
 
   const getAppName = (cert: ICertificate) => {
     if (!cert.applicationId) return '';
-    return appMap.get(cert.applicationId.toString()) || '';
+    const app = appMap.get(cert.applicationId.toString());
+    return app?.name || '';
+  };
+
+  const getAppOwner = (cert: ICertificate) => {
+    if (!cert.applicationId) return '';
+    const app = appMap.get(cert.applicationId.toString());
+    if (!app?.owners || app.owners.length === 0) return '';
+    return app.owners.map((o: any) => o.name).join(', ');
   };
 
   const buildCertRow = (cert: ICertificate, showDays: boolean = true) => {
     const daysLeft = Math.ceil((cert.validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     const appName = getAppName(cert);
+    const appOwner = getAppOwner(cert);
     const daysColor = daysLeft <= 7 ? '#d32f2f' : '#f57c00';
 
     return `
@@ -368,6 +377,7 @@ async function sendDigestEmail(
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.templateName || 'N/A')}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(appName || 'Not Assigned')}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(appOwner || 'N/A')}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
         ${showDays ? `<td style="padding: 6px 10px; border: 1px solid #ddd; color: ${daysColor}; font-weight: bold;">${daysLeft}d</td>` : ''}
       </tr>
@@ -376,12 +386,14 @@ async function sendDigestEmail(
 
   const buildReissuedRow = (cert: ICertificate) => {
     const appName = getAppName(cert);
+    const appOwner = getAppOwner(cert);
     return `
       <tr>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.commonName)}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.issuer.commonName)}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.templateName || 'N/A')}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(appName || 'Not Assigned')}</td>
+        <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(appOwner || 'N/A')}</td>
         <td style="padding: 6px 10px; border: 1px solid #ddd;">${escapeHtml(cert.validTo.toLocaleDateString())}</td>
       </tr>
     `;
@@ -424,6 +436,7 @@ async function sendDigestEmail(
             <th style="${tableHeaderStyle}">Issuing CA</th>
             <th style="${tableHeaderStyle}">Template</th>
             <th style="${tableHeaderStyle}">Application</th>
+            <th style="${tableHeaderStyle}">Owner</th>
             <th style="${tableHeaderStyle}">Expires</th>
             <th style="${tableHeaderStyle}">Days Left</th>
           </tr>
@@ -448,6 +461,7 @@ async function sendDigestEmail(
             <th style="${tableHeaderStyle}">Issuing CA</th>
             <th style="${tableHeaderStyle}">Template</th>
             <th style="${tableHeaderStyle}">Application</th>
+            <th style="${tableHeaderStyle}">Owner</th>
             <th style="${tableHeaderStyle}">Expires</th>
             <th style="${tableHeaderStyle}">Days Left</th>
           </tr>
@@ -472,6 +486,7 @@ async function sendDigestEmail(
             <th style="${tableHeaderStyle}">Issuing CA</th>
             <th style="${tableHeaderStyle}">Template</th>
             <th style="${tableHeaderStyle}">Application</th>
+            <th style="${tableHeaderStyle}">Owner</th>
             <th style="${tableHeaderStyle}">Expired</th>
           </tr>
         </thead>
@@ -490,11 +505,50 @@ async function sendDigestEmail(
     </html>
   `;
 
+  // Build CSV attachment with all certificate data from the digest
+  const csvRows: string[] = [];
+  csvRows.push('Section,Common Name,Issuing CA,Template,Application,Owner,Expiration Date,Days Left,Serial Number,Thumbprint,SANs');
+
+  const buildCsvRow = (section: string, cert: ICertificate) => {
+    const daysLeft = Math.ceil((cert.validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const appName = getAppName(cert);
+    const appOwner = getAppOwner(cert);
+    const sans = (cert.subjectAlternativeNames || []).join('; ');
+    const esc = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
+    return [
+      esc(section),
+      esc(cert.commonName),
+      esc(cert.issuer.commonName),
+      esc(cert.templateName || 'N/A'),
+      esc(appName || 'Not Assigned'),
+      esc(appOwner || 'N/A'),
+      esc(cert.validTo.toLocaleDateString()),
+      daysLeft.toString(),
+      esc(cert.serialNumber),
+      esc(cert.thumbprint),
+      esc(sans),
+    ].join(',');
+  };
+
+  criticalCerts.forEach(c => csvRows.push(buildCsvRow('Critical', c)));
+  expiringCerts.forEach(c => csvRows.push(buildCsvRow('Expiring', c)));
+  reissuedCerts.forEach(c => csvRows.push(buildCsvRow('Reissued', c)));
+
+  const csvContent = csvRows.join('\n');
+  const dateStr = new Date().toISOString().split('T')[0];
+
   await transporter.sendMail({
     from: config.from,
     to: recipients.join(', '),
     subject,
     html,
+    attachments: [
+      {
+        filename: `certificate-digest-${dateStr}.csv`,
+        content: csvContent,
+        contentType: 'text/csv',
+      },
+    ],
   });
 }
 
