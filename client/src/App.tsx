@@ -8,6 +8,7 @@ import CertificateDetail from './components/Certificates/CertificateDetail';
 import CAList from './components/CA/CAList';
 import CSRList from './components/CSR/CSRList';
 import CSRWizard from './components/CSR/CSRWizard';
+import CSRDetail from './components/CSR/CSRDetail';
 import ServerList from './components/Servers/ServerList';
 import Settings from './components/Settings/Settings';
 import ApplicationList from './components/Applications/ApplicationList';
@@ -76,6 +77,7 @@ function App() {
         <Route path="ca" element={<CAList />} />
         <Route path="csr" element={<CSRList />} />
         <Route path="csr/new" element={<OperatorRoute><CSRWizard /></OperatorRoute>} />
+        <Route path="csr/:id" element={<CSRDetail />} />
         <Route path="servers" element={<ServerList />} />
         <Route path="applications" element={<ApplicationList />} />
         <Route path="applications/:id" element={<ApplicationDetail />} />

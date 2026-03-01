@@ -141,8 +141,10 @@ export default function CSRList() {
         rowCount={data?.pagination.total || 0}
         paginationMode="server"
         getRowId={(row) => row._id}
+        onRowClick={(params) => navigate(`/csr/${params.id}`)}
         sx={{
           height: 'calc(100vh - 200px)',
+          cursor: 'pointer',
         }}
         disableRowSelectionOnClick
       />
