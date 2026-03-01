@@ -118,10 +118,21 @@ export async function getExpiringCertificates(req: Request, res: Response): Prom
     const now = new Date();
     const futureDate = new Date(now.getTime() + daysNum * 24 * 60 * 60 * 1000);
 
-    const certificates = await Certificate.find({
+    // Load excluded templates from settings to match dashboard stats filtering
+    const { NotificationSettings } = await import('../models/NotificationSettings');
+    const settings = await NotificationSettings.findOne();
+    const excludeTemplates = settings?.excludedTemplates || [];
+
+    const query: Record<string, any> = {
       status: { $nin: ['expired', 'revoked', 'reissued'] },
       validTo: { $gte: now, $lte: futureDate },
-    })
+    };
+
+    if (excludeTemplates.length > 0) {
+      query.templateName = { $nin: excludeTemplates };
+    }
+
+    const certificates = await Certificate.find(query)
       .sort({ validTo: 1 })
       .populate('issuer.caId', 'name displayName');
 
