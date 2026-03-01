@@ -1,8 +1,13 @@
 import { Request, Response } from 'express';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { CSRRequest } from '../models/CSRRequest';
 import { CertificateAuthority } from '../models/CertificateAuthority';
 import { Server } from '../models/Server';
-import { executePowerShell, submitCSR, validateHostname, sanitizePSString } from '../services/powershellService';
+import { executePowerShell, submitCSR, validateHostname, sanitizePSString, validateConfigString } from '../services/powershellService';
+import { generateOpenSSLCSR, getKeyPath, getCSRPath } from '../services/opensslService';
+import { deliverApacheCertificate } from '../services/csrDeliveryService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
@@ -16,9 +21,10 @@ function validateSubjectField(value: string): boolean {
 }
 
 function validateSAN(san: string): boolean {
-  // SANs should be valid DNS names, IPs, or email addresses
   return /^[a-zA-Z0-9.*@_-]+(\.[a-zA-Z0-9*_-]+)*$/.test(san) && san.length <= 253;
 }
+
+// ─── LIST / GET / CREATE / UPDATE ───────────────────────────────────────────────
 
 export async function listCSRs(req: Request, res: Response): Promise<void> {
   try {
@@ -172,7 +178,6 @@ export async function createCSR(req: AuthenticatedRequest, res: Response): Promi
 export async function updateCSR(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const updates = req.body;
 
     const csr = await CSRRequest.findById(id);
 
@@ -181,14 +186,12 @@ export async function updateCSR(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    // Only allow updates to draft CSRs
     if (csr.status !== 'draft') {
       res.status(400).json({ error: 'Can only update draft CSR requests' });
       return;
     }
 
-    // Whitelist allowed fields to prevent mass assignment
-    const allowedFields = ['commonName', 'subjectAlternativeNames', 'subject', 'keySize', 'keyAlgorithm', 'hashAlgorithm', 'templateName', 'targetCAId', 'targetServerId'] as const;
+    const allowedFields = ['commonName', 'subjectAlternativeNames', 'subject', 'keySize', 'keyAlgorithm', 'hashAlgorithm', 'templateName', 'targetCAId', 'targetServerId', 'deliveryEmails', 'serverType'] as const;
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         (csr as any)[field] = req.body[field];
@@ -205,6 +208,8 @@ export async function updateCSR(req: AuthenticatedRequest, res: Response): Promi
   }
 }
 
+// ─── GENERATE CSR ───────────────────────────────────────────────────────────────
+
 export async function generateCSR(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
@@ -217,12 +222,12 @@ export async function generateCSR(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    if (csr.status !== 'draft' && csr.status !== 'pending') {
+    if (csr.status !== 'draft') {
       res.status(400).json({ error: 'CSR already generated or processed' });
       return;
     }
 
-    // Validate all user-supplied values before building INF content
+    // ── Common validation ──────────────────────────────────────────────
     if (!validateSubjectField(csr.commonName)) {
       res.status(400).json({ error: 'Invalid common name: contains disallowed characters' });
       return;
@@ -238,7 +243,6 @@ export async function generateCSR(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    // Validate subject fields
     const subjectFields = ['organization', 'organizationalUnit', 'locality', 'state', 'country'] as const;
     const subject = csr.subject as Record<string, string | undefined>;
     for (const field of subjectFields) {
@@ -248,7 +252,6 @@ export async function generateCSR(req: AuthenticatedRequest, res: Response): Pro
       }
     }
 
-    // Validate SANs
     for (const san of csr.subjectAlternativeNames) {
       if (!validateSAN(san)) {
         res.status(400).json({ error: `Invalid SAN '${san}': must be a valid DNS name` });
@@ -256,15 +259,65 @@ export async function generateCSR(req: AuthenticatedRequest, res: Response): Pro
       }
     }
 
-    csr.status = 'pending';
+    // Mark as generating
+    csr.status = 'generating';
     updateWorkflowStep(csr, 'Generate CSR', 'pending');
     await csr.save();
 
-    // Build INF file content (all values validated above)
-    const sans = csr.subjectAlternativeNames.map((san, i) => `DNS.${i + 1}=${san}`).join('\n');
-    const subjectLine = buildSubjectLine(csr);
+    // ── Branch by server type ──────────────────────────────────────────
+    if (csr.serverType === 'apache') {
+      await generateApacheCSR(csr, req, res);
+    } else {
+      await generateIISCSR(csr, req, res);
+    }
+  } catch (error) {
+    logger.error('Generate CSR error:', error);
+    res.status(500).json({ error: 'Failed to generate CSR' });
+  }
+}
 
-    const infContent = `
+/**
+ * Apache path: Generate CSR + private key locally via OpenSSL.
+ * Private key remains on disk until delivery.
+ */
+async function generateApacheCSR(csr: any, req: AuthenticatedRequest, res: Response): Promise<void> {
+  const result = await generateOpenSSLCSR({
+    id: String(csr._id),
+    commonName: csr.commonName,
+    subjectAlternativeNames: csr.subjectAlternativeNames,
+    subject: csr.subject,
+    keySize: csr.keySize,
+    hashAlgorithm: csr.hashAlgorithm,
+  });
+
+  if (result.success && result.csrPEM) {
+    csr.csrPEM = result.csrPEM;
+    csr.privateKeyLocation = result.keyPath;
+    csr.status = 'pending';
+    updateWorkflowStep(csr, 'Generate CSR', 'completed');
+    await csr.save();
+
+    logger.info(`Apache CSR generated for ${csr.commonName} by ${req.user?.username}`);
+    res.json({ message: 'CSR generated via OpenSSL', csrPEM: result.csrPEM });
+  } else {
+    csr.errorMessage = result.error;
+    csr.status = 'failed';
+    updateWorkflowStep(csr, 'Generate CSR', 'failed', result.error);
+    await csr.save();
+
+    res.status(500).json({ error: 'OpenSSL CSR generation failed', details: result.error });
+  }
+}
+
+/**
+ * IIS path: Generate CSR on the target server via certreq -new over PSRemoting.
+ * Private key stays on the target server.
+ */
+async function generateIISCSR(csr: any, req: AuthenticatedRequest, res: Response): Promise<void> {
+  const sans = csr.subjectAlternativeNames.map((san: string, i: number) => `DNS.${i + 1}=${san}`).join('\n');
+  const subjectLine = buildSubjectLine(csr);
+
+  const infContent = `
 [Version]
 Signature="$Windows NT$"
 
@@ -290,59 +343,60 @@ OID=1.3.6.1.5.5.7.3.1
 ${sans ? `[Extensions]\n2.5.29.17 = "{text}"\n_continue_ = "${sans.replace(/\n/g, '&')}"` : ''}
 `.trim();
 
-    const targetServer = csr.targetServerId as any;
-    const computerName = targetServer?.fqdn || 'localhost';
+  const targetServer = csr.targetServerId as any;
+  const computerName = targetServer?.fqdn || 'localhost';
 
-    // Validate remote computer name if not localhost
-    if (computerName !== 'localhost' && !validateHostname(computerName)) {
-      res.status(400).json({ error: 'Invalid target server hostname' });
-      return;
-    }
+  if (computerName !== 'localhost' && !validateHostname(computerName)) {
+    csr.status = 'failed';
+    csr.errorMessage = 'Invalid target server hostname';
+    updateWorkflowStep(csr, 'Generate CSR', 'failed', 'Invalid target server hostname');
+    await csr.save();
+    res.status(400).json({ error: 'Invalid target server hostname' });
+    return;
+  }
 
-    // Use the CSR's MongoDB ObjectId (safe hex string) for temp file naming
-    const safeId = String(csr._id);
-    const result = await executePowerShell({
-      script: `
-        $infContent = @'
+  const safeId = String(csr._id);
+  const result = await executePowerShell({
+    script: `
+      $infContent = @'
 ${infContent}
 '@
-        $infPath = Join-Path $env:TEMP '${safeId}.inf'
-        $csrPath = Join-Path $env:TEMP '${safeId}.csr'
+      $infPath = Join-Path $env:TEMP '${safeId}.inf'
+      $csrPath = Join-Path $env:TEMP '${safeId}.csr'
 
-        $infContent | Out-File -FilePath $infPath -Encoding ASCII
+      $infContent | Out-File -FilePath $infPath -Encoding ASCII
 
-        certreq -new $infPath $csrPath
+      certreq -new $infPath $csrPath
 
-        if (Test-Path $csrPath) {
-          Get-Content $csrPath -Raw
-        } else {
-          throw "CSR generation failed"
-        }
-      `,
-      remoteComputer: computerName !== 'localhost' ? computerName : undefined,
-    });
+      if (Test-Path $csrPath) {
+        Get-Content $csrPath -Raw
+      } else {
+        throw "CSR generation failed"
+      }
+    `,
+    remoteComputer: computerName !== 'localhost' ? computerName : undefined,
+  });
 
-    if (result.success) {
-      csr.csrPEM = result.output;
-      csr.privateKeyLocation = `${computerName}:LocalMachine\\My`;
-      updateWorkflowStep(csr, 'Generate CSR', 'completed');
-      await csr.save();
+  if (result.success) {
+    csr.csrPEM = result.output;
+    csr.privateKeyLocation = `${computerName}:LocalMachine\\My`;
+    csr.status = 'pending';
+    updateWorkflowStep(csr, 'Generate CSR', 'completed');
+    await csr.save();
 
-      logger.info(`CSR generated for ${csr.commonName} by ${req.user?.username}`);
-      res.json({ message: 'CSR generated successfully', csrPEM: result.output });
-    } else {
-      csr.errorMessage = result.error;
-      updateWorkflowStep(csr, 'Generate CSR', 'failed', result.error);
-      csr.status = 'failed';
-      await csr.save();
+    logger.info(`IIS CSR generated for ${csr.commonName} on ${computerName} by ${req.user?.username}`);
+    res.json({ message: 'CSR generated successfully', csrPEM: result.output });
+  } else {
+    csr.errorMessage = result.error;
+    csr.status = 'failed';
+    updateWorkflowStep(csr, 'Generate CSR', 'failed', result.error);
+    await csr.save();
 
-      res.status(500).json({ error: 'Failed to generate CSR', details: result.error });
-    }
-  } catch (error) {
-    logger.error('Generate CSR error:', error);
-    res.status(500).json({ error: 'Failed to generate CSR' });
+    res.status(500).json({ error: 'Failed to generate CSR', details: result.error });
   }
 }
+
+// ─── SUBMIT TO CA ───────────────────────────────────────────────────────────────
 
 export async function submitCSRToCA(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -361,6 +415,11 @@ export async function submitCSRToCA(req: AuthenticatedRequest, res: Response): P
       return;
     }
 
+    if (csr.status !== 'pending') {
+      res.status(400).json({ error: 'CSR must be in pending status to submit' });
+      return;
+    }
+
     if (!csr.targetCAId) {
       res.status(400).json({ error: 'Target CA must be specified' });
       return;
@@ -368,29 +427,75 @@ export async function submitCSRToCA(req: AuthenticatedRequest, res: Response): P
 
     const ca = csr.targetCAId as any;
 
+    if (!validateConfigString(ca.configString)) {
+      res.status(400).json({ error: 'Invalid CA config string' });
+      return;
+    }
+
+    // Write CSR PEM to a temp file for certreq -submit
+    const tmpDir = os.tmpdir();
+    const csrTempPath = path.join(tmpDir, `${csr._id}.csr`);
+    fs.writeFileSync(csrTempPath, csr.csrPEM, 'utf-8');
+
     csr.status = 'submitted';
     updateWorkflowStep(csr, 'Submit to CA', 'pending');
     await csr.save();
 
     const result = await submitCSR(
-      `${process.env.TEMP || '/tmp'}/${csr._id}.csr`,
+      csrTempPath,
       ca.configString,
       csr.templateName || 'WebServer'
     );
 
-    if (result.success) {
-      updateWorkflowStep(csr, 'Submit to CA', 'completed');
-      csr.processedAt = new Date();
-      // In a real implementation, we would parse the issued certificate
-      // and create a Certificate record
-      await csr.save();
+    // Clean up CSR temp file (not the key — that's needed for Apache delivery)
+    try { fs.unlinkSync(csrTempPath); } catch {}
 
-      logger.info(`CSR submitted to CA for ${csr.commonName} by ${req.user?.username}`);
-      res.json({ message: 'CSR submitted successfully' });
+    if (result.success) {
+      // Parse the PowerShell JSON output from Submit-CertificateRequest.ps1
+      let caResponse: any = {};
+      try {
+        caResponse = JSON.parse(result.output);
+      } catch {
+        caResponse = { Success: true, Status: 'Issued', CertificateContent: result.output };
+      }
+
+      if (caResponse.Status === 'Issued' && caResponse.CertificateContent) {
+        csr.issuedCertPEM = caResponse.CertificateContent;
+        csr.status = 'issued';
+        csr.processedAt = new Date();
+        updateWorkflowStep(csr, 'Submit to CA', 'completed');
+        await csr.save();
+
+        logger.info(`CSR submitted and certificate issued for ${csr.commonName} by ${req.user?.username}`);
+        res.json({
+          message: 'Certificate issued successfully',
+          status: 'issued',
+          thumbprint: caResponse.Thumbprint,
+          serialNumber: caResponse.SerialNumber,
+        });
+      } else if (caResponse.Status === 'Pending') {
+        csr.status = 'submitted';
+        updateWorkflowStep(csr, 'Submit to CA', 'pending');
+        await csr.save();
+
+        logger.info(`CSR submitted for ${csr.commonName} — pending CA approval (RequestId: ${caResponse.RequestId})`);
+        res.json({
+          message: 'Certificate request submitted — pending CA manager approval',
+          status: 'pending',
+          requestId: caResponse.RequestId,
+        });
+      } else {
+        csr.errorMessage = caResponse.Error || 'Unknown CA response';
+        csr.status = 'failed';
+        updateWorkflowStep(csr, 'Submit to CA', 'failed', caResponse.Error);
+        await csr.save();
+
+        res.status(500).json({ error: 'CA submission failed', details: caResponse.Error });
+      }
     } else {
       csr.errorMessage = result.error;
-      updateWorkflowStep(csr, 'Submit to CA', 'failed', result.error);
       csr.status = 'failed';
+      updateWorkflowStep(csr, 'Submit to CA', 'failed', result.error);
       await csr.save();
 
       res.status(500).json({ error: 'Failed to submit CSR', details: result.error });
@@ -400,6 +505,77 @@ export async function submitCSRToCA(req: AuthenticatedRequest, res: Response): P
     res.status(500).json({ error: 'Failed to submit CSR' });
   }
 }
+
+// ─── DELIVER CERTIFICATE (Apache path) ──────────────────────────────────────────
+
+export async function deliverCSR(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+
+    const csr = await CSRRequest.findById(id);
+
+    if (!csr) {
+      res.status(404).json({ error: 'CSR request not found' });
+      return;
+    }
+
+    if (csr.status !== 'issued') {
+      res.status(400).json({ error: 'Certificate must be issued before delivery' });
+      return;
+    }
+
+    if (csr.serverType !== 'apache') {
+      res.status(400).json({ error: 'Delivery is only available for Apache certificates. IIS certificates are installed directly.' });
+      return;
+    }
+
+    if (!csr.issuedCertPEM) {
+      res.status(400).json({ error: 'No issued certificate available' });
+      return;
+    }
+
+    if (!csr.deliveryEmails || csr.deliveryEmails.length === 0) {
+      res.status(400).json({ error: 'No delivery email addresses configured' });
+      return;
+    }
+
+    // Mark as delivering
+    csr.status = 'delivering';
+    updateWorkflowStep(csr, 'Deliver Certificate', 'pending');
+    await csr.save();
+
+    const result = await deliverApacheCertificate({
+      csrId: String(csr._id),
+      commonName: csr.commonName,
+      recipients: csr.deliveryEmails,
+      certPEM: csr.issuedCertPEM,
+      requestedBy: csr.requestedBy,
+    });
+
+    if (result.success) {
+      csr.status = 'completed';
+      csr.deliveredAt = new Date();
+      csr.privateKeyLocation = undefined;
+      updateWorkflowStep(csr, 'Deliver Certificate', 'completed');
+      await csr.save();
+
+      logger.info(`Certificate for ${csr.commonName} delivered to ${csr.deliveryEmails.join(', ')} by ${req.user?.username}`);
+      res.json({ message: 'Certificate delivered successfully' });
+    } else {
+      csr.status = 'issued'; // Revert so delivery can be retried
+      csr.errorMessage = result.error;
+      updateWorkflowStep(csr, 'Deliver Certificate', 'failed', result.error);
+      await csr.save();
+
+      res.status(500).json({ error: 'Certificate delivery failed', details: result.error });
+    }
+  } catch (error) {
+    logger.error('Deliver CSR error:', error);
+    res.status(500).json({ error: 'Failed to deliver certificate' });
+  }
+}
+
+// ─── DELETE ─────────────────────────────────────────────────────────────────────
 
 export async function deleteCSR(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -412,9 +588,17 @@ export async function deleteCSR(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    if (csr.status === 'submitted') {
-      res.status(400).json({ error: 'Cannot delete submitted CSR' });
+    if (csr.status === 'submitted' || csr.status === 'delivering') {
+      res.status(400).json({ error: 'Cannot delete a CSR that is being processed' });
       return;
+    }
+
+    // Clean up any temp files for Apache CSRs
+    if (csr.serverType === 'apache') {
+      const keyPath = getKeyPath(String(csr._id));
+      const csrFilePath = getCSRPath(String(csr._id));
+      try { if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath); } catch {}
+      try { if (fs.existsSync(csrFilePath)) fs.unlinkSync(csrFilePath); } catch {}
     }
 
     await csr.deleteOne();
@@ -427,6 +611,8 @@ export async function deleteCSR(req: AuthenticatedRequest, res: Response): Promi
     res.status(500).json({ error: 'Failed to delete CSR request' });
   }
 }
+
+// ─── HELPERS ────────────────────────────────────────────────────────────────────
 
 function buildSubjectLine(csr: any): string {
   const parts: string[] = [`CN=${csr.commonName}`];

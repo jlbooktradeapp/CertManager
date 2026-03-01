@@ -6,6 +6,7 @@ import {
   updateCSR,
   generateCSR,
   submitCSRToCA,
+  deliverCSR,
   deleteCSR,
 } from '../controllers/csrController';
 import { authenticate } from '../middleware/auth';
@@ -34,6 +35,9 @@ router.post('/:id/generate', operatorOrAdmin, validateObjectId('id'), generateCS
 
 // POST /api/csr/:id/submit - Submit to CA
 router.post('/:id/submit', operatorOrAdmin, validateObjectId('id'), submitCSRToCA);
+
+// POST /api/csr/:id/deliver - Deliver certificate (Apache: email cert+key)
+router.post('/:id/deliver', operatorOrAdmin, validateObjectId('id'), deliverCSR);
 
 // DELETE /api/csr/:id - Cancel/delete CSR
 router.delete('/:id', operatorOrAdmin, validateObjectId('id'), deleteCSR);
