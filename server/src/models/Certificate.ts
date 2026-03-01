@@ -17,6 +17,26 @@ export interface INotificationSent {
   recipients: string[];
 }
 
+export interface IDeployedLocation {
+  hostname: string;
+  resolvedIP?: string;
+  networkLabel?: string;
+  port: number;
+  servedThumbprint?: string;
+  matchStatus?: 'match' | 'mismatch' | 'unknown' | 'error';
+  source: 'manual' | 'discovery';
+  lastProbeAt?: Date;
+}
+
+export interface IAutoRenew {
+  enabled: boolean;
+  daysBeforeExpiry: number;
+  lastRenewalAt?: Date;
+  targetServerId?: mongoose.Types.ObjectId;
+  deliveryEmails: string[];
+  targetCAId?: mongoose.Types.ObjectId;
+}
+
 export interface ICertificate extends Document {
   serialNumber: string;
   thumbprint: string;
@@ -41,8 +61,11 @@ export interface ICertificate extends Document {
   keySize?: number;
   encryptionType?: string;
   templateName?: string;
-  status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued';
+  serverType?: 'apache' | 'iis';
+  status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued' | 'rebound';
   deployedTo: IDeployment[];
+  deployedLocations: IDeployedLocation[];
+  autoRenew: IAutoRenew;
   notificationsSent: INotificationSent[];
   notificationRecipients: string[];
   applicationId?: mongoose.Types.ObjectId;
@@ -77,6 +100,34 @@ const NotificationSentSchema = new Schema<INotificationSent>({
   recipients: [{ type: String }],
 }, { _id: false });
 
+const DeployedLocationSchema = new Schema<IDeployedLocation>({
+  hostname: { type: String, required: true },
+  resolvedIP: String,
+  networkLabel: String,
+  port: { type: Number, default: 443 },
+  servedThumbprint: String,
+  matchStatus: {
+    type: String,
+    enum: ['match', 'mismatch', 'unknown', 'error'],
+    default: 'unknown',
+  },
+  source: {
+    type: String,
+    enum: ['manual', 'discovery'],
+    default: 'manual',
+  },
+  lastProbeAt: Date,
+}, { _id: false });
+
+const AutoRenewSchema = new Schema<IAutoRenew>({
+  enabled: { type: Boolean, default: false },
+  daysBeforeExpiry: { type: Number, default: 30, min: 7, max: 90 },
+  lastRenewalAt: Date,
+  targetServerId: { type: Schema.Types.ObjectId, ref: 'Server' },
+  deliveryEmails: [{ type: String }],
+  targetCAId: { type: Schema.Types.ObjectId, ref: 'CertificateAuthority' },
+}, { _id: false });
+
 const CertificateSchema = new Schema<ICertificate>({
   serialNumber: { type: String, required: true, unique: true, index: true },
   thumbprint: { type: String, required: true, unique: true, index: true },
@@ -101,13 +152,23 @@ const CertificateSchema = new Schema<ICertificate>({
   keySize: Number,
   encryptionType: String,
   templateName: String,
+  serverType: {
+    type: String,
+    enum: ['apache', 'iis'],
+    default: null,
+  },
   status: {
     type: String,
-    enum: ['active', 'expiring', 'expired', 'revoked', 'reissued'],
+    enum: ['active', 'expiring', 'expired', 'revoked', 'reissued', 'rebound'],
     default: 'active',
     index: true,
   },
   deployedTo: [DeploymentSchema],
+  deployedLocations: [DeployedLocationSchema],
+  autoRenew: {
+    type: AutoRenewSchema,
+    default: () => ({ enabled: false, daysBeforeExpiry: 30, deliveryEmails: [] }),
+  },
   notificationsSent: [NotificationSentSchema],
   notificationRecipients: [{ type: String }],
   applicationId: { type: Schema.Types.ObjectId, ref: 'Application', index: true },

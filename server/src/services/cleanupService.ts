@@ -51,9 +51,9 @@ export async function getEligibleCertificates(
       // Regular expired: validTo older than retention cutoff (date-based, not just status)
       { validTo: { $lt: cutoffDate }, status: { $in: ['expired'] } },
       // Also catch expired certs whose status wasn't updated yet (resilience)
-      { validTo: { $lt: cutoffDate }, status: { $nin: ['revoked', 'reissued'] } },
+      { validTo: { $lt: cutoffDate }, status: { $nin: ['revoked', 'reissued', 'rebound'] } },
       // Reissued: eligible as soon as they've expired (no retention wait)
-      { validTo: { $lt: now }, status: 'reissued' },
+      { validTo: { $lt: now }, status: { $in: ['reissued', 'rebound'] } },
     ],
   };
 
@@ -119,8 +119,8 @@ export async function getCleanupStats(): Promise<CleanupStats> {
     ...templateFilter,
     $or: [
       { validTo: { $lt: cutoffDate }, status: { $in: ['expired'] } },
-      { validTo: { $lt: cutoffDate }, status: { $nin: ['revoked', 'reissued'] } },
-      { validTo: { $lt: now }, status: 'reissued' },
+      { validTo: { $lt: cutoffDate }, status: { $nin: ['revoked', 'reissued', 'rebound'] } },
+      { validTo: { $lt: now }, status: { $in: ['reissued', 'rebound'] } },
     ],
   });
 

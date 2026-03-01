@@ -10,6 +10,7 @@ export interface CertificateStats {
   expired: number;
   revoked: number;
   reissued: number;
+  rebound: number;
   expiringIn30Days: number;
   expiringIn7Days: number;
 }
@@ -32,6 +33,7 @@ export async function getCertificateStats(excludeTemplates?: string[]): Promise<
     expired,
     revoked,
     reissued,
+    rebound,
     expiringIn30Days,
     expiringIn7Days,
   ] = await Promise.all([
@@ -41,14 +43,15 @@ export async function getCertificateStats(excludeTemplates?: string[]): Promise<
     Certificate.countDocuments({ ...base, status: 'expired' }),
     Certificate.countDocuments({ ...base, status: 'revoked' }),
     Certificate.countDocuments({ ...base, status: 'reissued' }),
+    Certificate.countDocuments({ ...base, status: 'rebound' }),
     Certificate.countDocuments({
       ...base,
-      status: { $nin: ['expired', 'revoked', 'reissued'] },
+      status: { $nin: ['expired', 'revoked', 'reissued', 'rebound'] },
       validTo: { $gte: now, $lte: in30Days },
     }),
     Certificate.countDocuments({
       ...base,
-      status: { $nin: ['expired', 'revoked', 'reissued'] },
+      status: { $nin: ['expired', 'revoked', 'reissued', 'rebound'] },
       validTo: { $gte: now, $lte: in7Days },
     }),
   ]);
@@ -60,6 +63,7 @@ export async function getCertificateStats(excludeTemplates?: string[]): Promise<
     expired,
     revoked,
     reissued,
+    rebound,
     expiringIn30Days,
     expiringIn7Days,
   };
@@ -72,7 +76,7 @@ export async function updateCertificateStatuses(): Promise<number> {
   // Mark expired certificates (but don't override 'reissued' or 'revoked')
   const expiredResult = await Certificate.updateMany(
     {
-      status: { $nin: ['expired', 'revoked', 'reissued'] },
+      status: { $nin: ['expired', 'revoked', 'reissued', 'rebound'] },
       validTo: { $lt: now },
     },
     { $set: { status: 'expired' } }
@@ -170,7 +174,7 @@ export async function detectReissuedCertificates(): Promise<number> {
     // All others are reissued
     const reissuedIds = sorted
       .slice(1)
-      .filter((c: any) => c.status !== 'reissued')
+      .filter((c: any) => c.status !== 'reissued' && c.status !== 'rebound')
       .map((c: any) => c._id);
 
     if (reissuedIds.length > 0) {
@@ -374,7 +378,7 @@ export async function getExpiringCertificates(days: number = 30): Promise<ICerti
   const futureDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 
   return Certificate.find({
-    status: { $nin: ['expired', 'revoked', 'reissued'] },
+    status: { $nin: ['expired', 'revoked', 'reissued', 'rebound'] },
     validTo: { $gte: now, $lte: futureDate },
   })
     .sort({ validTo: 1 })

@@ -12,6 +12,26 @@ export interface AuthResponse {
   user: User;
 }
 
+export interface DeployedLocation {
+  hostname: string;
+  resolvedIP?: string;
+  networkLabel?: string;
+  port: number;
+  servedThumbprint?: string;
+  matchStatus?: 'match' | 'mismatch' | 'unknown' | 'error';
+  source: 'manual' | 'discovery';
+  lastProbeAt?: string;
+}
+
+export interface AutoRenew {
+  enabled: boolean;
+  daysBeforeExpiry: number;
+  lastRenewalAt?: string;
+  targetServerId?: string;
+  deliveryEmails: string[];
+  targetCAId?: string;
+}
+
 export interface Certificate {
   _id: string;
   serialNumber: string;
@@ -37,7 +57,8 @@ export interface Certificate {
   keySize?: number;
   encryptionType?: string;
   templateName?: string;
-  status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued';
+  serverType?: 'apache' | 'iis';
+  status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued' | 'rebound';
   deployedTo: {
     serverId: string;
     serverName: string;
@@ -48,6 +69,8 @@ export interface Certificate {
     };
     deployedAt: string;
   }[];
+  deployedLocations: DeployedLocation[];
+  autoRenew: AutoRenew;
   metadata: {
     discoveredAt: string;
     lastSyncedAt: string;
@@ -79,6 +102,7 @@ export interface CertificateAuthority {
   lastSyncedAt: string;
   syncEnabled: boolean;
   syncIntervalMinutes: number;
+  issuanceEnabled: boolean;
 }
 
 export interface Server {
@@ -135,16 +159,21 @@ export interface CSRRequest {
     state?: string;
     country?: string;
   };
+  serverType: 'apache' | 'iis';
   keySize: 2048 | 4096;
   keyAlgorithm: 'RSA' | 'ECDSA';
   hashAlgorithm: 'SHA256' | 'SHA384' | 'SHA512';
   templateName?: string;
   targetCAId?: string;
   targetServerId?: string;
-  status: 'draft' | 'pending' | 'submitted' | 'issued' | 'failed' | 'cancelled';
+  applicationId?: string;
+  deliveryEmails: string[];
+  status: 'draft' | 'generating' | 'pending' | 'submitted' | 'issued' | 'delivering' | 'completed' | 'failed' | 'cancelled';
   csrPEM?: string;
   privateKeyLocation?: string;
   issuedCertificateId?: string;
+  issuedCertPEM?: string;
+  deliveredAt?: string;
   requestedBy: string;
   requestedAt: string;
   processedAt?: string;
@@ -164,6 +193,7 @@ export interface CertificateStats {
   expired: number;
   revoked: number;
   reissued: number;
+  rebound: number;
   expiringIn30Days: number;
   expiringIn7Days: number;
 }

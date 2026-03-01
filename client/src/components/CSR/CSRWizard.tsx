@@ -34,38 +34,51 @@ interface FormData {
   locality: string;
   state: string;
   country: string;
+  serverType: 'apache' | 'iis';
   keySize: 2048 | 4096;
   keyAlgorithm: 'RSA' | 'ECDSA';
   hashAlgorithm: 'SHA256' | 'SHA384' | 'SHA512';
   templateName: string;
   targetCAId: string;
   targetServerId: string;
+  deliveryEmails: string[];
 }
 
 export default function CSRWizard() {
   const navigate = useNavigate();
   const [activeStep, setActiveStep] = useState(0);
   const [sanInput, setSanInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
   const [formData, setFormData] = useState<FormData>({
     commonName: '',
     subjectAlternativeNames: [],
-    organization: '',
+    organization: 'Temple University Health Systems',
     organizationalUnit: '',
-    locality: '',
-    state: '',
-    country: '',
+    locality: 'Philadelphia',
+    state: 'Pennsylvania',
+    country: 'US',
+    serverType: 'iis',
     keySize: 2048,
     keyAlgorithm: 'RSA',
     hashAlgorithm: 'SHA256',
     templateName: 'WebServer',
     targetCAId: '',
     targetServerId: '',
+    deliveryEmails: [],
   });
 
   const { data: cas } = useQuery({
     queryKey: ['certificateAuthorities'],
     queryFn: async () => {
       const response = await api.get<CertificateAuthority[]>('/ca');
+      return response.data;
+    },
+  });
+
+  const { data: ous } = useQuery({
+    queryKey: ['organizationalUnits'],
+    queryFn: async () => {
+      const response = await api.get<string[]>('/certificates/ous');
       return response.data;
     },
   });
@@ -90,12 +103,14 @@ export default function CSRWizard() {
           state: formData.state || undefined,
           country: formData.country || undefined,
         },
+        serverType: formData.serverType,
         keySize: formData.keySize,
         keyAlgorithm: formData.keyAlgorithm,
         hashAlgorithm: formData.hashAlgorithm,
         templateName: formData.templateName || undefined,
         targetCAId: formData.targetCAId || undefined,
-        targetServerId: formData.targetServerId || undefined,
+        targetServerId: formData.serverType === 'iis' ? (formData.targetServerId || undefined) : undefined,
+        deliveryEmails: formData.serverType === 'apache' ? formData.deliveryEmails : [],
       };
       const response = await api.post('/csr', payload);
       return response.data;
@@ -140,6 +155,19 @@ export default function CSRWizard() {
         return (
           <Grid container spacing={3}>
             <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Web Server Type</InputLabel>
+                <Select
+                  value={formData.serverType}
+                  label="Web Server Type"
+                  onChange={(e) => setFormData({ ...formData, serverType: e.target.value as 'apache' | 'iis' })}
+                >
+                  <MenuItem value="iis">IIS (Windows / certreq)</MenuItem>
+                  <MenuItem value="apache">Apache (OpenSSL)</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
               <TextField
                 fullWidth
                 label="Common Name (CN)"
@@ -176,27 +204,39 @@ export default function CSRWizard() {
               </Box>
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Organization (O)"
-                value={formData.organization}
-                onChange={(e) => setFormData({ ...formData, organization: e.target.value })}
-              />
+              <FormControl fullWidth>
+                <InputLabel>Organization (O)</InputLabel>
+                <Select
+                  value={formData.organization}
+                  label="Organization (O)"
+                  onChange={(e) => setFormData({ ...formData, organization: e.target.value })}
+                >
+                  <MenuItem value="Temple University Health Systems">Temple University Health Systems</MenuItem>
+                  <MenuItem value="Fox Chase Cancer Center">Fox Chase Cancer Center</MenuItem>
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Organizational Unit (OU)"
-                value={formData.organizationalUnit}
-                onChange={(e) => setFormData({ ...formData, organizationalUnit: e.target.value })}
-              />
+              <FormControl fullWidth>
+                <InputLabel>Organizational Unit (OU)</InputLabel>
+                <Select
+                  value={formData.organizationalUnit}
+                  label="Organizational Unit (OU)"
+                  onChange={(e) => setFormData({ ...formData, organizationalUnit: e.target.value })}
+                >
+                  <MenuItem value="">None</MenuItem>
+                  {ous?.map((ou) => (
+                    <MenuItem key={ou} value={ou}>{ou}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} sm={4}>
               <TextField
                 fullWidth
                 label="Locality (L)"
                 value={formData.locality}
-                onChange={(e) => setFormData({ ...formData, locality: e.target.value })}
+                InputProps={{ readOnly: true }}
               />
             </Grid>
             <Grid item xs={12} sm={4}>
@@ -204,7 +244,7 @@ export default function CSRWizard() {
                 fullWidth
                 label="State (S)"
                 value={formData.state}
-                onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                InputProps={{ readOnly: true }}
               />
             </Grid>
             <Grid item xs={12} sm={4}>
@@ -212,8 +252,7 @@ export default function CSRWizard() {
                 fullWidth
                 label="Country (C)"
                 value={formData.country}
-                onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-                placeholder="US"
+                InputProps={{ readOnly: true }}
                 inputProps={{ maxLength: 2 }}
               />
             </Grid>
@@ -277,6 +316,8 @@ export default function CSRWizard() {
         );
 
       case 2:
+        // Filter CAs to only issuance-enabled ones
+        const issuanceCAs = cas?.filter((ca) => ca.issuanceEnabled) || [];
         return (
           <Grid container spacing={3}>
             <Grid item xs={12} sm={6}>
@@ -288,31 +329,83 @@ export default function CSRWizard() {
                   onChange={(e) => setFormData({ ...formData, targetCAId: e.target.value })}
                 >
                   <MenuItem value="">Select later</MenuItem>
-                  {cas?.map((ca) => (
+                  {issuanceCAs.map((ca) => (
                     <MenuItem key={ca._id} value={ca._id}>
                       {ca.displayName}
                     </MenuItem>
                   ))}
                 </Select>
+                {issuanceCAs.length === 0 && (
+                  <Typography variant="caption" color="warning.main" sx={{ mt: 0.5 }}>
+                    No CAs are enabled for issuance. Enable a CA in Certificate Authorities settings.
+                  </Typography>
+                )}
               </FormControl>
             </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Target Server</InputLabel>
-                <Select
-                  value={formData.targetServerId}
-                  label="Target Server"
-                  onChange={(e) => setFormData({ ...formData, targetServerId: e.target.value })}
-                >
-                  <MenuItem value="">Select later</MenuItem>
-                  {servers?.map((server) => (
-                    <MenuItem key={server._id} value={server._id}>
-                      {server.fqdn}
-                    </MenuItem>
+
+            {formData.serverType === 'iis' && (
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Target Server</InputLabel>
+                  <Select
+                    value={formData.targetServerId}
+                    label="Target Server"
+                    onChange={(e) => setFormData({ ...formData, targetServerId: e.target.value })}
+                  >
+                    <MenuItem value="">Select later</MenuItem>
+                    {servers?.map((server) => (
+                      <MenuItem key={server._id} value={server._id}>
+                        {server.fqdn}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            )}
+
+            {formData.serverType === 'apache' && (
+              <Grid item xs={12}>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <TextField
+                    fullWidth
+                    label="Delivery Email Address"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    placeholder="admin@example.com"
+                    helperText="Certificate and private key will be emailed to these addresses"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (emailInput && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput) && !formData.deliveryEmails.includes(emailInput)) {
+                          setFormData({ ...formData, deliveryEmails: [...formData.deliveryEmails, emailInput] });
+                          setEmailInput('');
+                        }
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      if (emailInput && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput) && !formData.deliveryEmails.includes(emailInput)) {
+                        setFormData({ ...formData, deliveryEmails: [...formData.deliveryEmails, emailInput] });
+                        setEmailInput('');
+                      }
+                    }}
+                  >
+                    <AddIcon />
+                  </Button>
+                </Box>
+                <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {formData.deliveryEmails.map((email) => (
+                    <Chip
+                      key={email}
+                      label={email}
+                      onDelete={() => setFormData({ ...formData, deliveryEmails: formData.deliveryEmails.filter((e) => e !== email) })}
+                    />
                   ))}
-                </Select>
-              </FormControl>
-            </Grid>
+                </Box>
+              </Grid>
+            )}
 
             <Grid item xs={12}>
               <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
@@ -321,6 +414,10 @@ export default function CSRWizard() {
               <Card variant="outlined">
                 <CardContent>
                   <Grid container spacing={2}>
+                    <Grid item xs={12}>
+                      <Typography variant="subtitle2" color="textSecondary">Server Type</Typography>
+                      <Typography sx={{ textTransform: 'uppercase' }}>{formData.serverType}</Typography>
+                    </Grid>
                     <Grid item xs={12}>
                       <Typography variant="subtitle2" color="textSecondary">Common Name</Typography>
                       <Typography>{formData.commonName}</Typography>
@@ -339,6 +436,12 @@ export default function CSRWizard() {
                       <Typography variant="subtitle2" color="textSecondary">Hash</Typography>
                       <Typography>{formData.hashAlgorithm}</Typography>
                     </Grid>
+                    {formData.serverType === 'apache' && formData.deliveryEmails.length > 0 && (
+                      <Grid item xs={12}>
+                        <Typography variant="subtitle2" color="textSecondary">Delivery Emails</Typography>
+                        <Typography>{formData.deliveryEmails.join(', ')}</Typography>
+                      </Grid>
+                    )}
                   </Grid>
                 </CardContent>
               </Card>

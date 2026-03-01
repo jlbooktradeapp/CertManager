@@ -85,12 +85,15 @@ export async function createCSR(req: AuthenticatedRequest, res: Response): Promi
       commonName,
       subjectAlternativeNames = [],
       subject = {},
+      serverType,
       keySize = 2048,
       keyAlgorithm = 'RSA',
       hashAlgorithm = 'SHA256',
       templateName,
       targetCAId,
       targetServerId,
+      applicationId,
+      deliveryEmails = [],
     } = req.body;
 
     if (!commonName) {
@@ -98,16 +101,25 @@ export async function createCSR(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    // Validate CA if provided
+    if (!serverType || !['apache', 'iis'].includes(serverType)) {
+      res.status(400).json({ error: 'serverType is required and must be "apache" or "iis"' });
+      return;
+    }
+
+    // Validate CA if provided — must be issuance-enabled
     if (targetCAId) {
       const ca = await CertificateAuthority.findById(targetCAId);
       if (!ca) {
         res.status(400).json({ error: 'Invalid certificate authority' });
         return;
       }
+      if (!ca.issuanceEnabled) {
+        res.status(400).json({ error: 'Selected CA is not enabled for certificate issuance' });
+        return;
+      }
     }
 
-    // Validate server if provided
+    // Validate server if provided (IIS path)
     if (targetServerId) {
       const server = await Server.findById(targetServerId);
       if (!server) {
@@ -116,27 +128,39 @@ export async function createCSR(req: AuthenticatedRequest, res: Response): Promi
       }
     }
 
+    // Build workflow steps based on server type
+    const workflowSteps = serverType === 'apache'
+      ? [
+          { step: 'Generate CSR', status: 'pending' as const },
+          { step: 'Submit to CA', status: 'pending' as const },
+          { step: 'Deliver Certificate', status: 'pending' as const },
+        ]
+      : [
+          { step: 'Generate CSR', status: 'pending' as const },
+          { step: 'Submit to CA', status: 'pending' as const },
+          { step: 'Install Certificate', status: 'pending' as const },
+        ];
+
     const csr = await CSRRequest.create({
       commonName,
       subjectAlternativeNames,
       subject,
+      serverType,
       keySize,
       keyAlgorithm,
       hashAlgorithm,
       templateName,
       targetCAId,
-      targetServerId,
+      targetServerId: serverType === 'iis' ? targetServerId : undefined,
+      applicationId: applicationId || undefined,
+      deliveryEmails: serverType === 'apache' ? deliveryEmails : [],
       status: 'draft',
       requestedBy: req.user?.username || 'unknown',
       requestedAt: new Date(),
-      workflowSteps: [
-        { step: 'Generate CSR', status: 'pending' },
-        { step: 'Submit to CA', status: 'pending' },
-        { step: 'Install Certificate', status: 'pending' },
-      ],
+      workflowSteps,
     });
 
-    logger.info(`CSR request created for ${commonName} by ${req.user?.username}`);
+    logger.info(`CSR request created for ${commonName} (${serverType}) by ${req.user?.username}`);
 
     res.status(201).json(csr);
   } catch (error) {

@@ -47,6 +47,7 @@ interface EditFormData {
   configString: string;
   syncEnabled: boolean;
   syncIntervalMinutes: number;
+  issuanceEnabled: boolean;
 }
 
 export default function CAList() {
@@ -66,6 +67,7 @@ export default function CAList() {
     configString: '',
     syncEnabled: true,
     syncIntervalMinutes: 60,
+    issuanceEnabled: false,
   });
 
   const { data: cas, isLoading, error } = useQuery({
@@ -133,6 +135,7 @@ export default function CAList() {
       configString: ca.configString,
       syncEnabled: ca.syncEnabled,
       syncIntervalMinutes: ca.syncIntervalMinutes,
+      issuanceEnabled: ca.issuanceEnabled,
     });
     setEditDialogOpen(true);
   };
@@ -201,6 +204,9 @@ export default function CAList() {
                   />
                   {ca.syncEnabled && (
                     <Chip label="Auto-sync" variant="outlined" size="small" color="primary" />
+                  )}
+                  {ca.issuanceEnabled && (
+                    <Chip label="Issuance" variant="outlined" size="small" color="success" sx={{ ml: 0.5 }} />
                   )}
                 </Box>
 
@@ -378,6 +384,16 @@ export default function CAList() {
                 helperText="How often to automatically sync certificates (5-1440 minutes)"
               />
             )}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editFormData.issuanceEnabled}
+                  onChange={(e) => setEditFormData({ ...editFormData, issuanceEnabled: e.target.checked })}
+                />
+              }
+              label="Enable for Certificate Issuance"
+              sx={{ mt: 1, display: 'block' }}
+            />
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>

@@ -154,7 +154,7 @@ async function findCertificatesExpiringInDays(days: number, excludedTemplates: s
   const previousDay = new Date(now.getTime() + (days - 1) * 24 * 60 * 60 * 1000);
 
   const query: any = {
-    status: { $nin: ['revoked', 'reissued'] },
+    status: { $nin: ['revoked', 'reissued', 'rebound'] },
     validTo: {
       $gte: previousDay,
       $lte: targetDate,
@@ -268,7 +268,7 @@ async function sendAdminDigest(settings: any): Promise<NotificationResult> {
 
   // Critical: expiring within 7 days (not yet expired)
   const criticalCerts = await Certificate.find({
-    status: { $nin: ['revoked', 'reissued'] },
+    status: { $nin: ['revoked', 'reissued', 'rebound'] },
     validTo: {
       $gte: now,
       $lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
@@ -278,7 +278,7 @@ async function sendAdminDigest(settings: any): Promise<NotificationResult> {
 
   // Expiring: expiring in 7-30 days
   const expiringCerts = await Certificate.find({
-    status: { $nin: ['revoked', 'reissued'] },
+    status: { $nin: ['revoked', 'reissued', 'rebound'] },
     validTo: {
       $gt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
       $lte: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),

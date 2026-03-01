@@ -37,7 +37,7 @@ export async function listCertificates(req: Request, res: Response): Promise<voi
       query.validTo = { $gte: now, $lte: futureDate };
       // Override status to exclude already expired/revoked/reissued
       if (!status) {
-        query.status = { $nin: ['expired', 'revoked', 'reissued'] };
+        query.status = { $nin: ['expired', 'revoked', 'reissued', 'rebound'] };
       }
     }
 
@@ -124,7 +124,7 @@ export async function getExpiringCertificates(req: Request, res: Response): Prom
     const excludeTemplates = settings?.excludedTemplates || [];
 
     const query: Record<string, any> = {
-      status: { $nin: ['expired', 'revoked', 'reissued'] },
+      status: { $nin: ['expired', 'revoked', 'reissued', 'rebound'] },
       validTo: { $gte: now, $lte: futureDate },
     };
 
@@ -150,6 +150,26 @@ export async function getTemplateNames(_req: Request, res: Response): Promise<vo
   } catch (error) {
     logger.error('Get template names error:', error);
     res.status(500).json({ error: 'Failed to get template names' });
+  }
+}
+
+export async function getOrganizationalUnits(_req: Request, res: Response): Promise<void> {
+  try {
+    // Respect excluded templates so OUs match the filtered certificate view
+    const { NotificationSettings } = await import('../models/NotificationSettings');
+    const settings = await NotificationSettings.findOne();
+    const excludeTemplates = settings?.excludedTemplates || [];
+
+    const query: Record<string, any> = {};
+    if (excludeTemplates.length > 0) {
+      query.templateName = { $nin: excludeTemplates };
+    }
+
+    const ous = await Certificate.distinct('subject.organizationalUnit', query);
+    res.json(ous.filter(Boolean).sort());
+  } catch (error) {
+    logger.error('Get organizational units error:', error);
+    res.status(500).json({ error: 'Failed to get organizational units' });
   }
 }
 
@@ -187,18 +207,53 @@ export async function triggerSync(req: AuthenticatedRequest, res: Response): Pro
 export async function updateCertificate(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { notificationRecipients, applicationId, status } = req.body;
+    const { notificationRecipients, applicationId, status, serverType, autoRenew } = req.body;
 
     const updates: Record<string, unknown> = {};
 
-    // Allow manual status override (only 'reissued' can be set manually)
+    // Allow manual status override
     if (status !== undefined) {
-      const allowedManualStatuses = ['reissued'];
+      const allowedManualStatuses = ['reissued', 'rebound'];
       if (!allowedManualStatuses.includes(status)) {
         res.status(400).json({ error: `Status can only be manually set to: ${allowedManualStatuses.join(', ')}` });
         return;
       }
       updates.status = status;
+    }
+
+    // Allow editing serverType (required for re-issue and auto-renewal)
+    if (serverType !== undefined) {
+      if (serverType !== null && serverType !== 'apache' && serverType !== 'iis') {
+        res.status(400).json({ error: 'serverType must be "apache", "iis", or null' });
+        return;
+      }
+      updates.serverType = serverType;
+    }
+
+    // Allow editing auto-renewal configuration
+    if (autoRenew !== undefined) {
+      if (typeof autoRenew !== 'object' || autoRenew === null) {
+        res.status(400).json({ error: 'autoRenew must be an object' });
+        return;
+      }
+      // Validate daysBeforeExpiry range
+      if (autoRenew.daysBeforeExpiry !== undefined) {
+        const days = Number(autoRenew.daysBeforeExpiry);
+        if (isNaN(days) || days < 7 || days > 90) {
+          res.status(400).json({ error: 'autoRenew.daysBeforeExpiry must be between 7 and 90' });
+          return;
+        }
+      }
+      // Can only enable auto-renewal when serverType is set
+      if (autoRenew.enabled) {
+        const cert = await Certificate.findById(id);
+        const effectiveServerType = serverType !== undefined ? serverType : cert?.serverType;
+        if (!effectiveServerType) {
+          res.status(400).json({ error: 'Cannot enable auto-renewal without a serverType set' });
+          return;
+        }
+      }
+      updates.autoRenew = autoRenew;
     }
 
     if (notificationRecipients !== undefined) {

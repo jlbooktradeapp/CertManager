@@ -7,7 +7,14 @@ import { AuthenticatedRequest } from '../middleware/auth';
 
 export async function listCAs(req: Request, res: Response): Promise<void> {
   try {
-    const cas = await CertificateAuthority.find()
+    const query: Record<string, any> = {};
+
+    // Support filtering by issuanceEnabled (for CSR form CA dropdown)
+    if (req.query.issuanceEnabled !== undefined) {
+      query.issuanceEnabled = req.query.issuanceEnabled === 'true';
+    }
+
+    const cas = await CertificateAuthority.find(query)
       .populate('parentCAId', 'name displayName')
       .sort({ type: 1, name: 1 });
 
@@ -89,7 +96,7 @@ export async function updateCA(req: AuthenticatedRequest, res: Response): Promis
     const { id } = req.params;
 
     // Whitelist allowed fields to prevent mass assignment
-    const allowedFields = ['displayName', 'hostname', 'configString', 'syncEnabled', 'syncIntervalMinutes', 'status'] as const;
+    const allowedFields = ['displayName', 'hostname', 'configString', 'syncEnabled', 'syncIntervalMinutes', 'status', 'issuanceEnabled'] as const;
     const updates: Record<string, unknown> = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {

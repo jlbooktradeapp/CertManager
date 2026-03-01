@@ -17,9 +17,12 @@ import { useState } from 'react';
 
 const statusColors: Record<string, 'default' | 'primary' | 'secondary' | 'success' | 'error' | 'warning'> = {
   draft: 'default',
+  generating: 'primary',
   pending: 'primary',
   submitted: 'secondary',
   issued: 'success',
+  delivering: 'secondary',
+  completed: 'success',
   failed: 'error',
   cancelled: 'warning',
 };
@@ -52,6 +55,18 @@ export default function CSRList() {
       headerName: 'Common Name',
       flex: 1,
       minWidth: 200,
+    },
+    {
+      field: 'serverType',
+      headerName: 'Server Type',
+      width: 110,
+      renderCell: (params: GridRenderCellParams<CSRRequest>) => (
+        <Chip
+          label={params.value === 'apache' ? 'Apache' : 'IIS'}
+          variant="outlined"
+          size="small"
+        />
+      ),
     },
     {
       field: 'status',

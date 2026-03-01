@@ -17,16 +17,21 @@ export interface ICSRRequest extends Document {
     state?: string;
     country?: string;
   };
+  serverType: 'apache' | 'iis';
   keySize: 2048 | 4096;
   keyAlgorithm: 'RSA' | 'ECDSA';
   hashAlgorithm: 'SHA256' | 'SHA384' | 'SHA512';
   templateName?: string;
   targetCAId?: mongoose.Types.ObjectId;
   targetServerId?: mongoose.Types.ObjectId;
-  status: 'draft' | 'pending' | 'submitted' | 'issued' | 'failed' | 'cancelled';
+  applicationId?: mongoose.Types.ObjectId;
+  deliveryEmails: string[];
+  status: 'draft' | 'generating' | 'pending' | 'submitted' | 'issued' | 'delivering' | 'completed' | 'failed' | 'cancelled';
   csrPEM?: string;
   privateKeyLocation?: string;
   issuedCertificateId?: mongoose.Types.ObjectId;
+  issuedCertPEM?: string;
+  deliveredAt?: Date;
   requestedBy: string;
   requestedAt: Date;
   processedAt?: Date;
@@ -55,6 +60,11 @@ const CSRRequestSchema = new Schema<ICSRRequest>({
     state: String,
     country: String,
   },
+  serverType: {
+    type: String,
+    enum: ['apache', 'iis'],
+    required: true,
+  },
   keySize: {
     type: Number,
     enum: [2048, 4096],
@@ -73,15 +83,19 @@ const CSRRequestSchema = new Schema<ICSRRequest>({
   templateName: String,
   targetCAId: { type: Schema.Types.ObjectId, ref: 'CertificateAuthority' },
   targetServerId: { type: Schema.Types.ObjectId, ref: 'Server' },
+  applicationId: { type: Schema.Types.ObjectId, ref: 'Application', index: true },
+  deliveryEmails: [{ type: String }],
   status: {
     type: String,
-    enum: ['draft', 'pending', 'submitted', 'issued', 'failed', 'cancelled'],
+    enum: ['draft', 'generating', 'pending', 'submitted', 'issued', 'delivering', 'completed', 'failed', 'cancelled'],
     default: 'draft',
     index: true,
   },
   csrPEM: String,
   privateKeyLocation: String,
   issuedCertificateId: { type: Schema.Types.ObjectId, ref: 'Certificate' },
+  issuedCertPEM: String,
+  deliveredAt: Date,
   requestedBy: { type: String, required: true },
   requestedAt: { type: Date, default: Date.now },
   processedAt: Date,
