@@ -23,7 +23,7 @@ try {
     # Create output path for certificate
     $certPath = $CSRPath -replace '\.csr$', '.cer'
 
-    # Submit request to CA
+    # Submit request to CA with template attribute
     $submitOutput = certreq -submit -config $ConfigString -attrib "CertificateTemplate:$Template" $CSRPath $certPath 2>&1
 
     if ($LASTEXITCODE -ne 0) {

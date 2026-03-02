@@ -21,6 +21,8 @@ export interface ICSRRequest extends Document {
   keySize: 2048 | 4096;
   keyAlgorithm: 'RSA' | 'ECDSA';
   hashAlgorithm: 'SHA256' | 'SHA384' | 'SHA512';
+  keyUsage: string[];
+  extendedKeyUsage: string[];
   templateName?: string;
   targetCAId?: mongoose.Types.ObjectId;
   targetServerId?: mongoose.Types.ObjectId;
@@ -79,6 +81,14 @@ const CSRRequestSchema = new Schema<ICSRRequest>({
     type: String,
     enum: ['SHA256', 'SHA384', 'SHA512'],
     default: 'SHA256',
+  },
+  keyUsage: {
+    type: [String],
+    default: ['digitalSignature', 'keyEncipherment'],
+  },
+  extendedKeyUsage: {
+    type: [String],
+    default: ['serverAuth', 'clientAuth'],
   },
   templateName: String,
   targetCAId: { type: Schema.Types.ObjectId, ref: 'CertificateAuthority' },

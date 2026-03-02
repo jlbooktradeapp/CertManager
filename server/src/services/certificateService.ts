@@ -297,6 +297,8 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
               keyUsage: certData.KeyUsage || [],
               extendedKeyUsage: certData.ExtendedKeyUsage || [],
               templateName: certData.Template,
+              templateRawValue: certData.TemplateRaw || certData.Template,
+              templateCN: certData.TemplateCN || certData.Template,
               keySize: certData.KeySize || undefined,
               encryptionType: certData.EncryptionType || undefined,
               'metadata.lastSyncedAt': new Date(),

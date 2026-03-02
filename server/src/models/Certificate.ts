@@ -61,6 +61,8 @@ export interface ICertificate extends Document {
   keySize?: number;
   encryptionType?: string;
   templateName?: string;
+  templateRawValue?: string;
+  templateCN?: string;
   serverType?: 'apache' | 'iis';
   status: 'active' | 'expiring' | 'expired' | 'revoked' | 'reissued' | 'rebound';
   deployedTo: IDeployment[];
@@ -152,6 +154,8 @@ const CertificateSchema = new Schema<ICertificate>({
   keySize: Number,
   encryptionType: String,
   templateName: String,
+  templateRawValue: String,
+  templateCN: String,
   serverType: {
     type: String,
     enum: ['apache', 'iis'],

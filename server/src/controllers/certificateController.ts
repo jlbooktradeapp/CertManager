@@ -143,10 +143,49 @@ export async function getExpiringCertificates(req: Request, res: Response): Prom
   }
 }
 
-export async function getTemplateNames(_req: Request, res: Response): Promise<void> {
+export async function getTemplateNames(req: Request, res: Response): Promise<void> {
   try {
-    const templates = await Certificate.distinct('templateName');
-    res.json(templates.filter(Boolean).sort());
+    const { excludeHidden, includeRaw } = req.query;
+
+    if (excludeHidden === 'true') {
+      const { NotificationSettings } = await import('../models/NotificationSettings');
+      const settings = await NotificationSettings.findOne();
+      const excludeTemplates = settings?.excludedTemplates || [];
+
+      const query: Record<string, any> = {};
+      if (excludeTemplates.length > 0) {
+        query.templateName = { $nin: excludeTemplates };
+      }
+
+      if (includeRaw === 'true') {
+        // Return display name + CN name pairs for CSR submission
+        // CN name is what certreq -attrib "CertificateTemplate:XXX" needs
+        const certs = await Certificate.find(query)
+          .select('templateName templateRawValue templateCN')
+          .where('templateName').ne(null);
+        
+        // Build a deduplicated map: displayName → CN name (for certreq)
+        const templatePairs = new Map<string, string>();
+        for (const cert of certs) {
+          if (cert.templateName && !templatePairs.has(cert.templateName)) {
+            // Prefer templateCN (the AD CN name), fall back to templateRawValue, then templateName
+            templatePairs.set(cert.templateName, cert.templateCN || cert.templateRawValue || cert.templateName);
+          }
+        }
+        
+        const result = Array.from(templatePairs.entries())
+          .map(([displayName, rawValue]) => ({ displayName, rawValue }))
+          .sort((a, b) => a.displayName.localeCompare(b.displayName));
+        
+        res.json(result);
+      } else {
+        const templates = await Certificate.distinct('templateName', query);
+        res.json(templates.filter(Boolean).sort());
+      }
+    } else {
+      const templates = await Certificate.distinct('templateName');
+      res.json(templates.filter(Boolean).sort());
+    }
   } catch (error) {
     logger.error('Get template names error:', error);
     res.status(500).json({ error: 'Failed to get template names' });

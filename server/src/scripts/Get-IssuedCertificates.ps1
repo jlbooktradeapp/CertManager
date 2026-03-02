@@ -32,13 +32,16 @@ param(
 $ErrorActionPreference = "Stop"
 
 try {
-    # Build template OID-to-friendly-name lookup from Active Directory
+    # Build template lookup maps from Active Directory
+    # templateMap: resolves OID or CN name → display name (for UI)
+    # templateCNMap: resolves OID → CN name (for certreq -attrib submission)
     $templateMap = @{}
+    $templateCNMap = @{}
     try {
         $configRoot = [ADSI]"LDAP://RootDSE"
         $configDN = $configRoot.configurationNamingContext
 
-        # Source 1: Certificate Templates container (maps name + OID to displayName)
+        # Source 1: Certificate Templates container (maps name + OID to displayName and CN)
         $templateContainer = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$configDN"
         $searcher = New-Object DirectoryServices.DirectorySearcher($templateContainer)
         $searcher.Filter = "(objectClass=pKICertificateTemplate)"
@@ -50,11 +53,17 @@ try {
             $displayName = $result.Properties["displayname"]
             $name = $result.Properties["name"]
             $friendlyName = if ($displayName -and $displayName.Count -gt 0) { $displayName[0] } elseif ($name -and $name.Count -gt 0) { $name[0] } else { "" }
+            $cnName = if ($name -and $name.Count -gt 0) { $name[0] } else { "" }
             if ($oid -and $oid.Count -gt 0 -and $friendlyName) {
                 $templateMap[$oid[0]] = $friendlyName
+                # Map OID → CN name so we can pass CN to certreq
+                if ($cnName) {
+                    $templateCNMap[$oid[0]] = $cnName
+                }
             }
-            if ($name -and $name.Count -gt 0 -and $friendlyName) {
-                $templateMap[$name[0]] = $friendlyName
+            if ($cnName -and $friendlyName) {
+                $templateMap[$cnName] = $friendlyName
+                $templateCNMap[$cnName] = $cnName
             }
         }
 
@@ -221,11 +230,15 @@ try {
                 # Use parsed CN, fall back to DB value
                 if (-not $CommonName) { $CommonName = $CertData["Issued Common Name"] }
 
-                # Resolve template OID to friendly name
+                # Resolve template OID to friendly name and CN name
                 $rawTemplate = $CertData["Certificate Template"]
                 $resolvedTemplate = $rawTemplate
+                $templateCN = $rawTemplate
                 if ($rawTemplate -and $templateMap.ContainsKey($rawTemplate)) {
                     $resolvedTemplate = $templateMap[$rawTemplate]
+                }
+                if ($rawTemplate -and $templateCNMap.ContainsKey($rawTemplate)) {
+                    $templateCN = $templateCNMap[$rawTemplate]
                 }
 
                 $cert = @{
@@ -236,6 +249,8 @@ try {
                     NotBefore       = if ($CertData["Certificate Effective Date"]) { ([DateTime]$CertData["Certificate Effective Date"]).ToString("o") } else { "" }
                     NotAfter        = if ($CertData["Certificate Expiration Date"]) { ([DateTime]$CertData["Certificate Expiration Date"]).ToString("o") } else { "" }
                     Template        = $resolvedTemplate
+                    TemplateRaw     = $rawTemplate
+                    TemplateCN      = $templateCN
                     Thumbprint      = $Thumbprint
                     KeySize         = $KeyLength
                     EncryptionType  = $SignatureAlgorithm

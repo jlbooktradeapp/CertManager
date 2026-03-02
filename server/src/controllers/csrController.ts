@@ -95,6 +95,8 @@ export async function createCSR(req: AuthenticatedRequest, res: Response): Promi
       keySize = 2048,
       keyAlgorithm = 'RSA',
       hashAlgorithm = 'SHA256',
+      keyUsage = ['digitalSignature', 'keyEncipherment'],
+      extendedKeyUsage = ['serverAuth', 'clientAuth'],
       templateName,
       targetCAId,
       targetServerId,
@@ -155,6 +157,8 @@ export async function createCSR(req: AuthenticatedRequest, res: Response): Promi
       keySize,
       keyAlgorithm,
       hashAlgorithm,
+      keyUsage,
+      extendedKeyUsage,
       templateName,
       targetCAId,
       targetServerId: serverType === 'iis' ? targetServerId : undefined,
@@ -191,7 +195,7 @@ export async function updateCSR(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    const allowedFields = ['commonName', 'subjectAlternativeNames', 'subject', 'keySize', 'keyAlgorithm', 'hashAlgorithm', 'templateName', 'targetCAId', 'targetServerId', 'deliveryEmails', 'serverType'] as const;
+    const allowedFields = ['commonName', 'subjectAlternativeNames', 'subject', 'keySize', 'keyAlgorithm', 'hashAlgorithm', 'keyUsage', 'extendedKeyUsage', 'templateName', 'targetCAId', 'targetServerId', 'deliveryEmails', 'serverType'] as const;
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         (csr as any)[field] = req.body[field];
@@ -288,6 +292,8 @@ async function generateApacheCSR(csr: any, req: AuthenticatedRequest, res: Respo
     subject: csr.subject,
     keySize: csr.keySize,
     hashAlgorithm: csr.hashAlgorithm,
+    keyUsage: csr.keyUsage,
+    extendedKeyUsage: csr.extendedKeyUsage,
   });
 
   if (result.success && result.csrPEM) {
@@ -317,6 +323,12 @@ async function generateIISCSR(csr: any, req: AuthenticatedRequest, res: Response
   const sans = csr.subjectAlternativeNames.map((san: string, i: number) => `DNS.${i + 1}=${san}`).join('\n');
   const subjectLine = buildSubjectLine(csr);
 
+  // Build dynamic KeyUsage bitmask for INF
+  const kuBitmask = buildKeyUsageBitmask(csr.keyUsage || ['digitalSignature', 'keyEncipherment']);
+
+  // Build dynamic EKU OID lines for INF
+  const ekuOids = buildEKUOids(csr.extendedKeyUsage || ['serverAuth', 'clientAuth']);
+
   const infContent = `
 [Version]
 Signature="$Windows NT$"
@@ -334,11 +346,10 @@ UseExistingKeySet = FALSE
 ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
 ProviderType = 12
 RequestType = PKCS10
-KeyUsage = 0xa0
+KeyUsage = 0x${kuBitmask}
 HashAlgorithm = ${csr.hashAlgorithm}
 
-[EnhancedKeyUsageExtension]
-OID=1.3.6.1.5.5.7.3.1
+${ekuOids.length > 0 ? `[EnhancedKeyUsageExtension]\n${ekuOids.map(oid => `OID=${oid}`).join('\n')}` : ''}
 
 ${sans ? `[Extensions]\n2.5.29.17 = "{text}"\n_continue_ = "${sans.replace(/\n/g, '&')}"` : ''}
 `.trim();
@@ -642,4 +653,48 @@ function updateWorkflowStep(
       step.error = error;
     }
   }
+}
+
+/**
+ * Build a hex bitmask string for the INF KeyUsage field.
+ * E.g. ['digitalSignature', 'keyEncipherment'] → 'a0'
+ */
+function buildKeyUsageBitmask(keyUsages: string[]): string {
+  const bits: Record<string, number> = {
+    'digitalSignature': 0x80,
+    'nonRepudiation':   0x40,
+    'keyEncipherment':  0x20,
+    'dataEncipherment': 0x10,
+    'keyAgreement':     0x08,
+    'keyCertSign':      0x04,
+    'crlSign':          0x02,
+    'encipherOnly':     0x01,
+    'decipherOnly':     0x8000,
+  };
+
+  let mask = 0;
+  for (const ku of keyUsages) {
+    if (bits[ku] !== undefined) {
+      mask |= bits[ku];
+    }
+  }
+  return mask.toString(16);
+}
+
+/**
+ * Map extended key usage names to OIDs for the INF [EnhancedKeyUsageExtension] section.
+ */
+function buildEKUOids(ekus: string[]): string[] {
+  const oidMap: Record<string, string> = {
+    'serverAuth':         '1.3.6.1.5.5.7.3.1',
+    'clientAuth':         '1.3.6.1.5.5.7.3.2',
+    'codeSigning':        '1.3.6.1.5.5.7.3.3',
+    'emailProtection':    '1.3.6.1.5.5.7.3.4',
+    'timeStamping':       '1.3.6.1.5.5.7.3.8',
+    'ocspSigning':        '1.3.6.1.5.5.7.3.9',
+    'smartCardLogon':     '1.3.6.1.4.1.311.20.2.2',
+    'kdcAuthentication':  '1.3.6.1.5.2.3.5',
+  };
+
+  return ekus.map(eku => oidMap[eku]).filter(Boolean);
 }

@@ -4,6 +4,35 @@ import * as os from 'os';
 import * as path from 'path';
 import { logger } from '../utils/logger';
 
+// Resolve the OpenSSL binary path — check env var, then common Windows install locations
+function resolveOpenSSLPath(): string {
+  if (process.env.OPENSSL_PATH) {
+    return process.env.OPENSSL_PATH;
+  }
+
+  // Common Windows install paths for OpenSSL
+  const candidates = [
+    'C:\\Program Files\\OpenSSL-Win64\\bin\\openssl.exe',
+    'C:\\Program Files (x86)\\OpenSSL-Win32\\bin\\openssl.exe',
+    'C:\\OpenSSL-Win64\\bin\\openssl.exe',
+    'C:\\OpenSSL-Win32\\bin\\openssl.exe',
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        logger.info(`OpenSSL found at: ${candidate}`);
+        return candidate;
+      }
+    } catch {}
+  }
+
+  // Fall back to bare 'openssl' and hope it's in PATH
+  return 'openssl';
+}
+
+const OPENSSL_BIN = resolveOpenSSLPath();
+
 export interface OpenSSLResult {
   success: boolean;
   csrPEM?: string;
@@ -25,6 +54,8 @@ export interface OpenSSLCSROptions {
   };
   keySize: number;
   hashAlgorithm: string;
+  keyUsage?: string[];
+  extendedKeyUsage?: string[];
 }
 
 /**
@@ -33,7 +64,7 @@ export interface OpenSSLCSROptions {
  * The caller is responsible for cleaning up the key file after delivery.
  */
 export async function generateOpenSSLCSR(options: OpenSSLCSROptions): Promise<OpenSSLResult> {
-  const { id, commonName, subjectAlternativeNames, subject, keySize, hashAlgorithm } = options;
+  const { id, commonName, subjectAlternativeNames, subject, keySize, hashAlgorithm, keyUsage, extendedKeyUsage } = options;
 
   const tmpDir = os.tmpdir();
   const confPath = path.join(tmpDir, `${id}.cnf`);
@@ -63,6 +94,36 @@ export async function generateOpenSSLCSR(options: OpenSSLCSROptions): Promise<Op
   };
   const digest = digestMap[hashAlgorithm] || 'sha256';
 
+  // Map key usage values to OpenSSL config names
+  const kuMap: Record<string, string> = {
+    'digitalSignature': 'digitalSignature',
+    'nonRepudiation': 'nonRepudiation',
+    'keyEncipherment': 'keyEncipherment',
+    'dataEncipherment': 'dataEncipherment',
+    'keyAgreement': 'keyAgreement',
+    'keyCertSign': 'keyCertSign',
+    'crlSign': 'cRLSign',
+    'encipherOnly': 'encipherOnly',
+    'decipherOnly': 'decipherOnly',
+  };
+
+  // Map extended key usage values to OpenSSL config names / OIDs
+  const ekuMap: Record<string, string> = {
+    'serverAuth': 'serverAuth',
+    'clientAuth': 'clientAuth',
+    'codeSigning': 'codeSigning',
+    'emailProtection': 'emailProtection',
+    'timeStamping': 'timeStamping',
+    'ocspSigning': 'OCSPSigning',
+    'smartCardLogon': '1.3.6.1.4.1.311.20.2.2',
+    'kdcAuthentication': '1.3.6.1.5.2.3.5',
+  };
+
+  const kuLine = (keyUsage && keyUsage.length > 0 ? keyUsage : ['digitalSignature', 'keyEncipherment'])
+    .map(ku => kuMap[ku]).filter(Boolean).join(', ');
+  const ekuLine = (extendedKeyUsage && extendedKeyUsage.length > 0 ? extendedKeyUsage : ['serverAuth', 'clientAuth'])
+    .map(eku => ekuMap[eku]).filter(Boolean).join(', ');
+
   const confContent = `[req]
 default_bits = ${keySize}
 prompt = no
@@ -79,8 +140,8 @@ ${subject.organizationalUnit ? `OU = ${subject.organizationalUnit}` : ''}
 CN = ${commonName}
 
 [v3_req]
-keyUsage = digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
+${kuLine ? `keyUsage = ${kuLine}` : ''}
+${ekuLine ? `extendedKeyUsage = ${ekuLine}` : ''}
 subjectAltName = @alt_names
 
 [alt_names]
@@ -185,7 +246,8 @@ function safeDelete(filePath: string): void {
 
 function runOpenSSL(args: string[]): Promise<{ success: boolean; output: string; error?: string }> {
   return new Promise((resolve) => {
-    const proc = spawn('openssl', args, {
+    logger.info(`Running: ${OPENSSL_BIN} ${args.join(' ')}`);
+    const proc = spawn(OPENSSL_BIN, args, {
       windowsHide: true,
       timeout: 30000,
     });
@@ -208,7 +270,10 @@ function runOpenSSL(args: string[]): Promise<{ success: boolean; output: string;
 
     proc.on('error', (err) => {
       logger.error('OpenSSL spawn error:', err);
-      resolve({ success: false, output: '', error: err.message });
+      const hint = err.message.includes('ENOENT')
+        ? `OpenSSL not found at '${OPENSSL_BIN}'. Set OPENSSL_PATH in .env to the full path of openssl.exe`
+        : err.message;
+      resolve({ success: false, output: '', error: hint });
     });
   });
 }

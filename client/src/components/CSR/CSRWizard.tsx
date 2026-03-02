@@ -12,19 +12,52 @@ import {
   TextField,
   Button,
   FormControl,
+  FormControlLabel,
+  FormGroup,
+  FormLabel,
   InputLabel,
   Select,
   MenuItem,
   Grid,
   Chip,
+  Checkbox,
   IconButton,
   Alert,
+  Divider,
 } from '@mui/material';
 import { Add as AddIcon, ArrowBack as BackIcon } from '@mui/icons-material';
 import api from '../../services/api';
 import { CertificateAuthority, Server } from '../../types';
 
 const steps = ['Subject Information', 'Certificate Options', 'Target & Review'];
+
+// ─── Key Usage & Extended Key Usage definitions ─────────────────────────────────
+
+const KEY_USAGE_OPTIONS = [
+  { value: 'digitalSignature', label: 'Digital Signature' },
+  { value: 'nonRepudiation', label: 'Non-Repudiation' },
+  { value: 'keyEncipherment', label: 'Key Encipherment' },
+  { value: 'dataEncipherment', label: 'Data Encipherment' },
+  { value: 'keyAgreement', label: 'Key Agreement' },
+  { value: 'keyCertSign', label: 'Certificate Signing' },
+  { value: 'crlSign', label: 'CRL Signing' },
+  { value: 'encipherOnly', label: 'Encipher Only' },
+  { value: 'decipherOnly', label: 'Decipher Only' },
+] as const;
+
+const EXTENDED_KEY_USAGE_OPTIONS = [
+  { value: 'serverAuth', label: 'Server Authentication' },
+  { value: 'clientAuth', label: 'Client Authentication' },
+  { value: 'codeSigning', label: 'Code Signing' },
+  { value: 'emailProtection', label: 'Email Protection (S/MIME)' },
+  { value: 'timeStamping', label: 'Time Stamping' },
+  { value: 'ocspSigning', label: 'OCSP Signing' },
+  { value: 'smartCardLogon', label: 'Smart Card Logon' },
+  { value: 'kdcAuthentication', label: 'KDC Authentication' },
+] as const;
+
+const DEFAULT_KEY_USAGE = ['digitalSignature', 'keyEncipherment'];
+const DEFAULT_EKU = ['serverAuth', 'clientAuth'];
 
 interface FormData {
   commonName: string;
@@ -38,6 +71,8 @@ interface FormData {
   keySize: 2048 | 4096;
   keyAlgorithm: 'RSA' | 'ECDSA';
   hashAlgorithm: 'SHA256' | 'SHA384' | 'SHA512';
+  keyUsage: string[];
+  extendedKeyUsage: string[];
   templateName: string;
   targetCAId: string;
   targetServerId: string;
@@ -61,7 +96,9 @@ export default function CSRWizard() {
     keySize: 2048,
     keyAlgorithm: 'RSA',
     hashAlgorithm: 'SHA256',
-    templateName: 'WebServer',
+    keyUsage: [...DEFAULT_KEY_USAGE],
+    extendedKeyUsage: [...DEFAULT_EKU],
+    templateName: '',
     targetCAId: '',
     targetServerId: '',
     deliveryEmails: [],
@@ -91,6 +128,17 @@ export default function CSRWizard() {
     },
   });
 
+  // Fetch templates filtered by global excluded list — includes raw values for CA submission
+  const { data: templates } = useQuery({
+    queryKey: ['templates-filtered-raw'],
+    queryFn: async () => {
+      const response = await api.get<{ displayName: string; rawValue: string }[]>(
+        '/certificates/templates?excludeHidden=true&includeRaw=true'
+      );
+      return response.data;
+    },
+  });
+
   const createMutation = useMutation({
     mutationFn: async () => {
       const payload = {
@@ -107,6 +155,8 @@ export default function CSRWizard() {
         keySize: formData.keySize,
         keyAlgorithm: formData.keyAlgorithm,
         hashAlgorithm: formData.hashAlgorithm,
+        keyUsage: formData.keyUsage,
+        extendedKeyUsage: formData.extendedKeyUsage,
         templateName: formData.templateName || undefined,
         targetCAId: formData.targetCAId || undefined,
         targetServerId: formData.serverType === 'iis' ? (formData.targetServerId || undefined) : undefined,
@@ -137,6 +187,22 @@ export default function CSRWizard() {
     });
   };
 
+  const handleToggleKeyUsage = (value: string) => {
+    const current = formData.keyUsage;
+    const updated = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    setFormData({ ...formData, keyUsage: updated });
+  };
+
+  const handleToggleEKU = (value: string) => {
+    const current = formData.extendedKeyUsage;
+    const updated = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    setFormData({ ...formData, extendedKeyUsage: updated });
+  };
+
   const handleNext = () => {
     setActiveStep((prev) => prev + 1);
   };
@@ -148,6 +214,10 @@ export default function CSRWizard() {
   const handleSubmit = () => {
     createMutation.mutate();
   };
+
+  // Helpers for display labels in the review section
+  const getKULabel = (value: string) => KEY_USAGE_OPTIONS.find(o => o.value === value)?.label || value;
+  const getEKULabel = (value: string) => EXTENDED_KEY_USAGE_OPTIONS.find(o => o.value === value)?.label || value;
 
   const renderStepContent = (step: number) => {
     switch (step) {
@@ -262,6 +332,7 @@ export default function CSRWizard() {
       case 1:
         return (
           <Grid container spacing={3}>
+            {/* Row 1: Key Size + Key Algorithm */}
             <Grid item xs={12} sm={6}>
               <FormControl fullWidth>
                 <InputLabel>Key Size</InputLabel>
@@ -288,6 +359,8 @@ export default function CSRWizard() {
                 </Select>
               </FormControl>
             </Grid>
+
+            {/* Row 2: Hash Algorithm + Certificate Template (required by Enterprise CA) */}
             <Grid item xs={12} sm={6}>
               <FormControl fullWidth>
                 <InputLabel>Hash Algorithm</InputLabel>
@@ -303,14 +376,69 @@ export default function CSRWizard() {
               </FormControl>
             </Grid>
             <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Certificate Template"
-                value={formData.templateName}
-                onChange={(e) => setFormData({ ...formData, templateName: e.target.value })}
-                placeholder="WebServer"
-                helperText="Windows CA certificate template name"
-              />
+              <FormControl fullWidth required>
+                <InputLabel>Certificate Template</InputLabel>
+                <Select
+                  value={formData.templateName}
+                  label="Certificate Template"
+                  onChange={(e) => setFormData({ ...formData, templateName: e.target.value })}
+                >
+                  {templates?.map((t) => (
+                    <MenuItem key={t.rawValue} value={t.rawValue}>{t.displayName}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+
+            {/* Divider before Key Usage sections */}
+            <Grid item xs={12}>
+              <Divider sx={{ my: 1 }} />
+            </Grid>
+
+            {/* Key Usage checkboxes */}
+            <Grid item xs={12} md={6}>
+              <FormControl component="fieldset">
+                <FormLabel component="legend" sx={{ fontWeight: 600, mb: 1 }}>Key Usage</FormLabel>
+                <FormGroup>
+                  {KEY_USAGE_OPTIONS.map((option) => (
+                    <FormControlLabel
+                      key={option.value}
+                      control={
+                        <Checkbox
+                          checked={formData.keyUsage.includes(option.value)}
+                          onChange={() => handleToggleKeyUsage(option.value)}
+                          size="small"
+                        />
+                      }
+                      label={option.label}
+                      sx={{ height: 32 }}
+                    />
+                  ))}
+                </FormGroup>
+              </FormControl>
+            </Grid>
+
+            {/* Extended Key Usage checkboxes */}
+            <Grid item xs={12} md={6}>
+              <FormControl component="fieldset">
+                <FormLabel component="legend" sx={{ fontWeight: 600, mb: 1 }}>Extended Key Usage</FormLabel>
+                <FormGroup>
+                  {EXTENDED_KEY_USAGE_OPTIONS.map((option) => (
+                    <FormControlLabel
+                      key={option.value}
+                      control={
+                        <Checkbox
+                          checked={formData.extendedKeyUsage.includes(option.value)}
+                          onChange={() => handleToggleEKU(option.value)}
+                          size="small"
+                        />
+                      }
+                      label={option.label}
+                      sx={{ height: 32 }}
+                    />
+                  ))}
+                </FormGroup>
+              </FormControl>
             </Grid>
           </Grid>
         );
@@ -436,6 +564,34 @@ export default function CSRWizard() {
                       <Typography variant="subtitle2" color="textSecondary">Hash</Typography>
                       <Typography>{formData.hashAlgorithm}</Typography>
                     </Grid>
+                    {formData.templateName && (
+                      <Grid item xs={12}>
+                        <Typography variant="subtitle2" color="textSecondary">Certificate Template</Typography>
+                        <Typography>
+                          {templates?.find(t => t.rawValue === formData.templateName)?.displayName || formData.templateName}
+                        </Typography>
+                      </Grid>
+                    )}
+                    {formData.keyUsage.length > 0 && (
+                      <Grid item xs={6}>
+                        <Typography variant="subtitle2" color="textSecondary">Key Usage</Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                          {formData.keyUsage.map((ku) => (
+                            <Chip key={ku} label={getKULabel(ku)} size="small" variant="outlined" />
+                          ))}
+                        </Box>
+                      </Grid>
+                    )}
+                    {formData.extendedKeyUsage.length > 0 && (
+                      <Grid item xs={6}>
+                        <Typography variant="subtitle2" color="textSecondary">Extended Key Usage</Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                          {formData.extendedKeyUsage.map((eku) => (
+                            <Chip key={eku} label={getEKULabel(eku)} size="small" variant="outlined" />
+                          ))}
+                        </Box>
+                      </Grid>
+                    )}
                     {formData.serverType === 'apache' && formData.deliveryEmails.length > 0 && (
                       <Grid item xs={12}>
                         <Typography variant="subtitle2" color="textSecondary">Delivery Emails</Typography>

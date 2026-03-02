@@ -163,6 +163,8 @@ export interface CSRRequest {
   keySize: 2048 | 4096;
   keyAlgorithm: 'RSA' | 'ECDSA';
   hashAlgorithm: 'SHA256' | 'SHA384' | 'SHA512';
+  keyUsage: string[];
+  extendedKeyUsage: string[];
   templateName?: string;
   targetCAId?: string;
   targetServerId?: string;
