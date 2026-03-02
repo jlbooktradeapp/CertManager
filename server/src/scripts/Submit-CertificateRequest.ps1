@@ -45,7 +45,7 @@ try {
 
     # Check if certificate was issued
     if (Test-Path $certPath) {
-        $certContent = Get-Content $certPath -Raw
+        $certContent = [System.IO.File]::ReadAllText($certPath)
 
         # Get certificate details
         $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath)
