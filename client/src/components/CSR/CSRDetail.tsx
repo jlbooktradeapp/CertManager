@@ -27,6 +27,8 @@ import {
   HourglassEmpty as PendingIcon,
   Delete as DeleteIcon,
   Email as EmailIcon,
+  CloudDownload as InstallIcon,
+  Computer as ServerIcon,
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { CSRRequest } from '../../types';
@@ -112,6 +114,21 @@ export default function CSRDetail() {
     },
   });
 
+  const installMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post(`/csr/${id}/install`);
+      return response.data;
+    },
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['csr', id] });
+    },
+    onError: (err: any) => {
+      setActionError(err.response?.data?.error || err.message);
+      queryClient.invalidateQueries({ queryKey: ['csr', id] });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async () => {
       await api.delete(`/csr/${id}`);
@@ -136,7 +153,7 @@ export default function CSRDetail() {
     return <Alert severity="error">Failed to load CSR request</Alert>;
   }
 
-  const isProcessing = generateMutation.isPending || submitMutation.isPending || deliverMutation.isPending;
+  const isProcessing = generateMutation.isPending || submitMutation.isPending || deliverMutation.isPending || installMutation.isPending;
 
   // Determine which step is active for the stepper
   const getActiveStep = (): number => {
@@ -150,6 +167,7 @@ export default function CSRDetail() {
   const canGenerate = csr.status === 'draft' && isOperator;
   const canSubmit = csr.status === 'pending' && isOperator;
   const canDeliver = csr.status === 'issued' && csr.serverType === 'apache' && isOperator;
+  const canInstall = csr.status === 'issued' && csr.serverType === 'iis' && isOperator;
   const canDelete = !['submitted', 'delivering'].includes(csr.status) && isOperator;
 
   return (
@@ -246,6 +264,20 @@ export default function CSRDetail() {
                           sx={{ mt: 1 }}
                         >
                           Deliver via Email
+                        </Button>
+                      )}
+
+                      {index === 2 && canInstall && (
+                        <Button
+                          variant="contained"
+                          size="small"
+                          color="success"
+                          startIcon={isProcessing ? <CircularProgress size={16} /> : <InstallIcon />}
+                          onClick={() => installMutation.mutate()}
+                          disabled={isProcessing}
+                          sx={{ mt: 1 }}
+                        >
+                          Install on Server
                         </Button>
                       )}
                     </StepContent>
@@ -361,6 +393,13 @@ export default function CSRDetail() {
                   </Grid>
                 )}
 
+                {(csr.targetCAId as any)?.displayName && (
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="textSecondary">Certificate Authority</Typography>
+                    <Typography>{(csr.targetCAId as any).displayName}</Typography>
+                  </Grid>
+                )}
+
                 <Grid item xs={6}>
                   <Typography variant="caption" color="textSecondary">Requested By</Typography>
                   <Typography>{csr.requestedBy}</Typography>
@@ -379,6 +418,43 @@ export default function CSRDetail() {
                         <Chip key={email} label={email} size="small" variant="outlined" icon={<EmailIcon />} />
                       ))}
                     </Box>
+                  </Grid>
+                )}
+
+                {csr.serverType === 'iis' && (csr.targetServerId as any)?.fqdn && (
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="textSecondary">Target Server</Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <ServerIcon fontSize="small" color="action" />
+                      <Typography>{(csr.targetServerId as any).fqdn || (csr.targetServerId as any).hostname}</Typography>
+                    </Box>
+                  </Grid>
+                )}
+
+                {csr.privateKeyLocation && (
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="textSecondary">Private Key Location</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                      {csr.privateKeyLocation}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {csr.issuedThumbprint && (
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="textSecondary">Certificate Thumbprint</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                      {csr.issuedThumbprint}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {csr.issuedSerialNumber && (
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="textSecondary">Serial Number</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                      {csr.issuedSerialNumber}
+                    </Typography>
                   </Grid>
                 )}
 

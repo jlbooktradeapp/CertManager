@@ -7,6 +7,7 @@ import {
   generateCSR,
   submitCSRToCA,
   deliverCSR,
+  installCSR,
   deleteCSR,
 } from '../controllers/csrController';
 import { authenticate } from '../middleware/auth';
@@ -38,6 +39,9 @@ router.post('/:id/submit', operatorOrAdmin, validateObjectId('id'), submitCSRToC
 
 // POST /api/csr/:id/deliver - Deliver certificate (Apache: email cert+key)
 router.post('/:id/deliver', operatorOrAdmin, validateObjectId('id'), deliverCSR);
+
+// POST /api/csr/:id/install - Install certificate (IIS: certreq -accept on target server)
+router.post('/:id/install', operatorOrAdmin, validateObjectId('id'), installCSR);
 
 // DELETE /api/csr/:id - Cancel/delete CSR
 router.delete('/:id', operatorOrAdmin, validateObjectId('id'), deleteCSR);

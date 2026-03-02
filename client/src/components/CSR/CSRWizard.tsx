@@ -598,6 +598,22 @@ export default function CSRWizard() {
                         <Typography>{formData.deliveryEmails.join(', ')}</Typography>
                       </Grid>
                     )}
+                    {formData.serverType === 'iis' && formData.targetServerId && (
+                      <Grid item xs={12}>
+                        <Typography variant="subtitle2" color="textSecondary">Target Server</Typography>
+                        <Typography>
+                          {servers?.find(s => s._id === formData.targetServerId)?.fqdn || 'Unknown'}
+                        </Typography>
+                      </Grid>
+                    )}
+                    {formData.targetCAId && (
+                      <Grid item xs={12}>
+                        <Typography variant="subtitle2" color="textSecondary">Certificate Authority</Typography>
+                        <Typography>
+                          {cas?.find(ca => ca._id === formData.targetCAId)?.displayName || 'Unknown'}
+                        </Typography>
+                      </Grid>
+                    )}
                   </Grid>
                 </CardContent>
               </Card>

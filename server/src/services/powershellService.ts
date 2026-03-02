@@ -1,6 +1,8 @@
 import { logger } from '../utils/logger';
 import { spawn } from 'child_process';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 
 export interface PowerShellResult {
   success: boolean;
@@ -117,9 +119,26 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
       command = `Invoke-Command -ComputerName '${sanitizePSString(remoteComputer)}' -ScriptBlock { ${command} }`;
     }
 
-    args.push('-Command', command);
+    // For complex commands (multi-line or remote), write to a temp .ps1 file
+    // and run with -File instead of -Command. This avoids PowerShell's -Command
+    // string parser mangling multi-line scripts, here-strings, and nested braces.
+    let tempScriptPath: string | null = null;
+    const isComplexCommand = command.includes('\n') || remoteComputer;
 
-    logger.debug('Executing PowerShell command', { scriptFile: scriptFile || '(inline)' });
+    if (isComplexCommand) {
+      tempScriptPath = path.join(os.tmpdir(), `certmgr-ps-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
+      try {
+        fs.writeFileSync(tempScriptPath, command, 'utf-8');
+      } catch (writeErr: any) {
+        resolve({ success: false, output: '', error: `Failed to write temp script: ${writeErr.message}` });
+        return;
+      }
+      args.push('-File', tempScriptPath);
+    } else {
+      args.push('-Command', command);
+    }
+
+    logger.debug('Executing PowerShell command', { scriptFile: scriptFile || '(inline)', remote: !!remoteComputer, tempFile: !!tempScriptPath });
 
     const ps = spawn('powershell.exe', args, {
       windowsHide: true,
@@ -138,6 +157,11 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
     });
 
     ps.on('close', (code) => {
+      // Clean up temp script file
+      if (tempScriptPath) {
+        try { fs.unlinkSync(tempScriptPath); } catch {}
+      }
+
       if (code === 0) {
         resolve({ success: true, output: stdout.trim() });
       } else {
@@ -147,6 +171,11 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
     });
 
     ps.on('error', (err) => {
+      // Clean up temp script file
+      if (tempScriptPath) {
+        try { fs.unlinkSync(tempScriptPath); } catch {}
+      }
+
       logger.error('PowerShell spawn error:', err);
       resolve({ success: false, output: '', error: err.message });
     });

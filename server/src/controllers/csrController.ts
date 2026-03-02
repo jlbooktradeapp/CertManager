@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { CSRRequest } from '../models/CSRRequest';
+import { Certificate } from '../models/Certificate';
 import { CertificateAuthority } from '../models/CertificateAuthority';
 import { Server } from '../models/Server';
 import { executePowerShell, submitCSR, validateHostname, sanitizePSString, validateConfigString } from '../services/powershellService';
@@ -367,22 +368,37 @@ ${sans ? `[Extensions]\n2.5.29.17 = "{text}"\n_continue_ = "${sans.replace(/\n/g
   }
 
   const safeId = String(csr._id);
+
+  // Base64 encode the INF content to avoid here-string parsing issues
+  // when the script is wrapped inside Invoke-Command -ScriptBlock { } for PSRemoting.
+  // Here-strings (@'...'@) break when passed via powershell.exe -Command.
+  const infBase64 = Buffer.from(infContent, 'utf-8').toString('base64');
+
   const result = await executePowerShell({
     script: `
-      $infContent = @'
-${infContent}
-'@
+      $infContent = [System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String('${infBase64}'))
       $infPath = Join-Path $env:TEMP '${safeId}.inf'
       $csrPath = Join-Path $env:TEMP '${safeId}.csr'
 
       $infContent | Out-File -FilePath $infPath -Encoding ASCII
 
-      certreq -new $infPath $csrPath
+      try {
+        cmd /c "certreq -new \`"$infPath\`" \`"$csrPath\`" < NUL" 2>&1
 
-      if (Test-Path $csrPath) {
-        Get-Content $csrPath -Raw
-      } else {
-        throw "CSR generation failed"
+        if (Test-Path $csrPath) {
+          $csrContent = Get-Content $csrPath -Raw
+          # Clean up temp files on target
+          Remove-Item $csrPath -Force -ErrorAction SilentlyContinue
+          Remove-Item $infPath -Force -ErrorAction SilentlyContinue
+          $csrContent
+        } else {
+          throw "CSR generation failed - no CSR file produced by certreq"
+        }
+      } catch {
+        # Clean up temp files even on failure
+        Remove-Item $infPath -Force -ErrorAction SilentlyContinue
+        Remove-Item $csrPath -Force -ErrorAction SilentlyContinue
+        throw $_
       }
     `,
     remoteComputer: computerName !== 'localhost' ? computerName : undefined,
@@ -472,6 +488,8 @@ export async function submitCSRToCA(req: AuthenticatedRequest, res: Response): P
 
       if (caResponse.Status === 'Issued' && caResponse.CertificateContent) {
         csr.issuedCertPEM = caResponse.CertificateContent;
+        csr.issuedThumbprint = caResponse.Thumbprint || undefined;
+        csr.issuedSerialNumber = caResponse.SerialNumber || undefined;
         csr.status = 'issued';
         csr.processedAt = new Date();
         updateWorkflowStep(csr, 'Submit to CA', 'completed');
@@ -583,6 +601,193 @@ export async function deliverCSR(req: AuthenticatedRequest, res: Response): Prom
   } catch (error) {
     logger.error('Deliver CSR error:', error);
     res.status(500).json({ error: 'Failed to deliver certificate' });
+  }
+}
+
+// ─── INSTALL CERTIFICATE (IIS path) ──────────────────────────────────────────────
+
+export async function installCSR(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+
+    const csr = await CSRRequest.findById(id)
+      .populate('targetServerId');
+
+    if (!csr) {
+      res.status(404).json({ error: 'CSR request not found' });
+      return;
+    }
+
+    if (csr.status !== 'issued') {
+      res.status(400).json({ error: 'Certificate must be issued before installation' });
+      return;
+    }
+
+    if (csr.serverType !== 'iis') {
+      res.status(400).json({ error: 'Installation is only available for IIS certificates. Apache certificates are delivered via email.' });
+      return;
+    }
+
+    if (!csr.issuedCertPEM) {
+      res.status(400).json({ error: 'No issued certificate available' });
+      return;
+    }
+
+    if (!csr.targetServerId) {
+      res.status(400).json({ error: 'No target server configured for this IIS request' });
+      return;
+    }
+
+    const targetServer = csr.targetServerId as any;
+    const computerName = targetServer?.fqdn || targetServer?.hostname;
+
+    if (!computerName) {
+      res.status(400).json({ error: 'Target server has no FQDN or hostname configured' });
+      return;
+    }
+
+    if (computerName !== 'localhost' && !validateHostname(computerName)) {
+      res.status(400).json({ error: 'Invalid target server hostname' });
+      return;
+    }
+
+    // Mark as delivering (installing)
+    csr.status = 'delivering';
+    updateWorkflowStep(csr, 'Install Certificate', 'pending');
+    await csr.save();
+
+    try {
+      // Run certreq -accept on target server via PSRemoting.
+      // certreq -accept completes the pending request created by certreq -new,
+      // pairing the issued certificate with the private key on the target machine.
+      const safeId = String(csr._id);
+
+      // Base64 encode the cert PEM to avoid here-string parsing issues
+      // when the script is wrapped inside Invoke-Command -ScriptBlock { } for PSRemoting.
+      const certBase64 = Buffer.from(csr.issuedCertPEM, 'utf-8').toString('base64');
+
+      const result = await executePowerShell({
+        script: `
+          $certContent = [System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String('${certBase64}'))
+          $certPath = Join-Path $env:TEMP '${safeId}.cer'
+          $certContent | Out-File -FilePath $certPath -Encoding ASCII -Force
+
+          # Accept the certificate to complete the pending request
+          $acceptOutput = cmd /c "certreq -accept \`"$certPath\`" < NUL" 2>&1
+
+          if ($LASTEXITCODE -ne 0) {
+            $errorMsg = $acceptOutput | Out-String
+            Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+            throw "certreq -accept failed: $errorMsg"
+          }
+
+          # Clean up temp cert file
+          Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+
+          # Verify the certificate is now in the store
+          $installedCert = Get-ChildItem -Path Cert:\\LocalMachine\\My | Where-Object {
+            $_.Subject -match '${sanitizePSString(csr.commonName)}'
+          } | Sort-Object NotAfter -Descending | Select-Object -First 1
+
+          if ($installedCert) {
+            $result = @{
+              Success = $true
+              Thumbprint = $installedCert.Thumbprint
+              Subject = $installedCert.Subject
+              NotAfter = $installedCert.NotAfter.ToString("o")
+              SerialNumber = $installedCert.SerialNumber
+              Store = "LocalMachine\\My"
+            }
+            $result | ConvertTo-Json -Compress
+          } else {
+            # Certificate may still have been accepted even if we can't find it by CN match
+            $result = @{
+              Success = $true
+              Message = "certreq -accept completed but certificate could not be verified in store"
+              AcceptOutput = ($acceptOutput | Out-String).Trim()
+            }
+            $result | ConvertTo-Json -Compress
+          }
+        `,
+        remoteComputer: computerName !== 'localhost' ? computerName : undefined,
+        timeout: 120000, // 2 minutes for remote operations
+      });
+
+      if (result.success) {
+        let installResult: any = {};
+        try {
+          installResult = JSON.parse(result.output);
+        } catch {
+          installResult = { Success: true, Message: result.output };
+        }
+
+        csr.status = 'completed';
+        csr.deliveredAt = new Date();
+        csr.privateKeyLocation = `${computerName}:LocalMachine\\My`;
+        updateWorkflowStep(csr, 'Install Certificate', 'completed');
+
+        // Link the issued certificate to the Certificate inventory if we have a thumbprint.
+        // This gives immediate visibility — the next CA sync will enrich with full details.
+        const thumbprintToMatch = installResult.Thumbprint || csr.issuedThumbprint;
+        const serialToMatch = installResult.SerialNumber || csr.issuedSerialNumber;
+
+        if (thumbprintToMatch || serialToMatch) {
+          try {
+            let linkedCert = thumbprintToMatch
+              ? await Certificate.findOne({ thumbprint: thumbprintToMatch })
+              : null;
+
+            if (!linkedCert && serialToMatch) {
+              linkedCert = await Certificate.findOne({ serialNumber: serialToMatch });
+            }
+
+            if (linkedCert) {
+              csr.issuedCertificateId = linkedCert._id;
+              if (!linkedCert.serverType) {
+                linkedCert.serverType = 'iis';
+                await linkedCert.save();
+              }
+              logger.info(`Linked CSR ${csr._id} to Certificate ${linkedCert._id} (${linkedCert.thumbprint})`);
+            }
+            // If cert not found, the next CA sync will pick it up
+          } catch (linkErr) {
+            // Don't fail the install if certificate linking fails
+            logger.warn(`Could not link issued certificate for ${csr.commonName}: ${linkErr}`);
+          }
+        }
+
+        await csr.save();
+
+        logger.info(`IIS certificate for ${csr.commonName} installed on ${computerName} by ${req.user?.username} (Thumbprint: ${installResult.Thumbprint || 'unknown'})`);
+
+        res.json({
+          message: 'Certificate installed successfully on target server',
+          server: computerName,
+          thumbprint: installResult.Thumbprint,
+          serialNumber: installResult.SerialNumber,
+          store: installResult.Store || 'LocalMachine\\My',
+        });
+      } else {
+        csr.status = 'issued'; // Revert so install can be retried
+        csr.errorMessage = result.error;
+        updateWorkflowStep(csr, 'Install Certificate', 'failed', result.error);
+        await csr.save();
+
+        logger.error(`IIS certificate install failed for ${csr.commonName} on ${computerName}: ${result.error}`);
+        res.status(500).json({ error: 'Certificate installation failed', details: result.error });
+      }
+    } catch (installError: any) {
+      csr.status = 'issued'; // Revert so install can be retried
+      csr.errorMessage = installError.message;
+      updateWorkflowStep(csr, 'Install Certificate', 'failed', installError.message);
+      await csr.save();
+
+      logger.error(`IIS certificate install error for ${csr.commonName}: ${installError.message}`);
+      res.status(500).json({ error: 'Certificate installation failed', details: installError.message });
+    }
+  } catch (error) {
+    logger.error('Install CSR error:', error);
+    res.status(500).json({ error: 'Failed to install certificate' });
   }
 }
 
