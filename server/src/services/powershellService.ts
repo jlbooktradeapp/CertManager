@@ -140,16 +140,15 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
 
     logger.debug('Executing PowerShell command', { scriptFile: scriptFile || '(inline)', remote: !!remoteComputer, tempFile: !!tempScriptPath });
 
-    // === DIAGNOSTIC LOGGING ===
+    // SEC-021: Diagnostic logging gated behind debug level
     if (tempScriptPath) {
-      logger.info(`[PS-DEBUG] Temp script path: ${tempScriptPath}`);
+      logger.debug(`[PS-DEBUG] Temp script path: ${tempScriptPath}`);
     }
     if (remoteComputer) {
-      logger.info(`[PS-DEBUG] Remote target: ${remoteComputer}`);
+      logger.debug(`[PS-DEBUG] Remote target: ${remoteComputer}`);
     }
-    logger.info(`[PS-DEBUG] Spawn args: powershell.exe ${args.join(' ')}`);
-    logger.info(`[PS-DEBUG] Timeout: ${timeout}ms, windowsHide: true, stdio: [ignore, pipe, pipe]`);
-    // === END DIAGNOSTIC LOGGING ===
+    logger.debug(`[PS-DEBUG] Spawn args: powershell.exe ${args.join(' ')}`);
+    logger.debug(`[PS-DEBUG] Timeout: ${timeout}ms, windowsHide: true, stdio: [ignore, pipe, pipe]`);
 
     const ps = spawn('powershell.exe', args, {
       stdio: ['ignore', 'pipe', 'pipe'],  // Close stdin to prevent certreq hanging

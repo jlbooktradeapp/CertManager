@@ -1,6 +1,7 @@
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { logger } from './utils/logger';
 
 // Route imports
@@ -15,8 +16,28 @@ import cleanupRoutes from './routes/cleanup';
 
 const app: Application = express();
 
-// Security middleware
-app.use(helmet());
+// SEC-013: Security middleware with explicit CSP configuration
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],  // MUI requires inline styles
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,  // 1 year
+    includeSubDomains: true,
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
 
 // CORS configuration
 const corsOrigin = process.env.NODE_ENV === 'production'
@@ -41,6 +62,17 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   logger.debug(`${req.method} ${req.path}`);
   next();
 });
+
+// SEC-006: Global rate limiting — 100 requests per minute per IP
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req: Request) => req.path === '/health',  // Don't rate-limit health checks
+});
+app.use(globalLimiter);
 
 // API routes
 const API_PREFIX = process.env.API_PREFIX || '/api';

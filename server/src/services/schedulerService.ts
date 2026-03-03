@@ -1,10 +1,14 @@
 import cron from 'node-cron';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { logger } from '../utils/logger';
 import { sendExpirationNotifications } from './notificationService';
 import { syncAllCAs } from './certificateService';
 
 let notificationJob: cron.ScheduledTask | null = null;
 let syncJob: cron.ScheduledTask | null = null;
+let cleanupJob: cron.ScheduledTask | null = null;
 
 export function initializeScheduler(): void {
   // Run expiration check daily at 8 AM
@@ -35,6 +39,15 @@ export function initializeScheduler(): void {
   });
 
   logger.info('Scheduler initialized with notification and sync jobs');
+
+  // SEC-005 + SEC-026: Orphan private key and temp script cleanup every 15 minutes
+  cleanupJob = cron.schedule('*/15 * * * *', () => {
+    cleanupOrphanFiles();
+  }, {
+    scheduled: true,
+  });
+
+  logger.info('Orphan file cleanup job scheduled (every 15 minutes)');
 }
 
 export function stopScheduler(): void {
@@ -48,7 +61,62 @@ export function stopScheduler(): void {
     syncJob = null;
   }
 
+  if (cleanupJob) {
+    cleanupJob.stop();
+    cleanupJob = null;
+  }
+
   logger.info('Scheduler stopped');
+}
+
+/**
+ * SEC-005: Clean up orphan private key files (.key) older than 1 hour.
+ * SEC-026: Clean up failed PowerShell temp scripts (.ps1) older than 1 hour.
+ * Runs every 15 minutes via cron.
+ */
+function cleanupOrphanFiles(): void {
+  const tmpDir = os.tmpdir();
+  const maxAgeMs = 60 * 60 * 1000; // 1 hour
+  const now = Date.now();
+  let keysDeleted = 0;
+  let scriptsDeleted = 0;
+
+  try {
+    const files = fs.readdirSync(tmpDir);
+    for (const file of files) {
+      // Match orphan .key files (from OpenSSL CSR generation)
+      // and orphan .csr / .cnf files
+      const isOrphanKey = file.endsWith('.key') && /^[a-f0-9]{24}\.key$/.test(file);
+      const isOrphanCSR = file.endsWith('.csr') && /^[a-f0-9]{24}\.csr$/.test(file);
+      const isOrphanConf = file.endsWith('.cnf') && /^[a-f0-9]{24}\.cnf$/.test(file);
+      // Match failed PowerShell temp scripts
+      const isTempPS = file.startsWith('certmgr-ps-') && file.endsWith('.ps1');
+
+      if (isOrphanKey || isOrphanCSR || isOrphanConf || isTempPS) {
+        const filePath = path.join(tmpDir, file);
+        try {
+          const stat = fs.statSync(filePath);
+          if (now - stat.mtimeMs > maxAgeMs) {
+            fs.unlinkSync(filePath);
+            if (isOrphanKey) {
+              keysDeleted++;
+              logger.warn(`Orphan private key deleted: ${file}`);
+            } else if (isTempPS) {
+              scriptsDeleted++;
+              logger.info(`Orphan PS temp script deleted: ${file}`);
+            } else {
+              logger.info(`Orphan temp file deleted: ${file}`);
+            }
+          }
+        } catch {}
+      }
+    }
+    if (keysDeleted > 0 || scriptsDeleted > 0) {
+      logger.info(`Orphan cleanup: ${keysDeleted} key file(s), ${scriptsDeleted} PS script(s) deleted`);
+    }
+  } catch (err: any) {
+    logger.error(`Orphan file cleanup error: ${err.message}`);
+  }
 }
 
 export function runNotificationCheckNow(): Promise<void> {

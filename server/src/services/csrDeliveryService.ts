@@ -83,7 +83,19 @@ export async function deliverApacheCertificate(options: {
   }
 }
 
+// SEC-018: Escape HTML special characters to prevent injection in email templates
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function buildDeliveryEmail(commonName: string, requestedBy: string): string {
+  const safeCN = escapeHtml(commonName);
+  const safeRequester = escapeHtml(requestedBy);
   return `
     <!DOCTYPE html>
     <html>
@@ -95,11 +107,11 @@ function buildDeliveryEmail(commonName: string, requestedBy: string): string {
       <table style="border-collapse: collapse; margin: 16px 0;">
         <tr>
           <td style="padding: 8px 16px; background: #f5f5f5; font-weight: bold; border: 1px solid #ddd;">Common Name</td>
-          <td style="padding: 8px 16px; border: 1px solid #ddd;">${commonName}</td>
+          <td style="padding: 8px 16px; border: 1px solid #ddd;">${safeCN}</td>
         </tr>
         <tr>
           <td style="padding: 8px 16px; background: #f5f5f5; font-weight: bold; border: 1px solid #ddd;">Requested By</td>
-          <td style="padding: 8px 16px; border: 1px solid #ddd;">${requestedBy}</td>
+          <td style="padding: 8px 16px; border: 1px solid #ddd;">${safeRequester}</td>
         </tr>
       </table>
 
@@ -118,11 +130,15 @@ function buildDeliveryEmail(commonName: string, requestedBy: string): string {
       <h3 style="color: #333;">Apache Installation</h3>
       <p>Add the following to your Apache virtual host configuration:</p>
       <pre style="background: #f5f5f5; padding: 12px; border-radius: 4px; font-size: 13px;">
-SSLCertificateFile    /path/to/${commonName}.cer
-SSLCertificateKeyFile /path/to/${commonName}.key</pre>
+SSLCertificateFile    /path/to/${safeCN}.cer
+SSLCertificateKeyFile /path/to/${safeCN}.key</pre>
 
       <p style="color: #666; font-size: 12px; margin-top: 30px;">
         This is an automated message from Certificate Manager.
+      </p>
+
+      <p style="color: #666; font-size: 12px; margin-top: 30px;">
+        tuhsencryptedmessage
       </p>
     </body>
     </html>

@@ -23,12 +23,17 @@ export async function login(req: Request, res: Response): Promise<void> {
 
     let ldapUser: LdapUserInfo | null = null;
 
-    // Check for local test account first
+    // Local test account — ONLY available in development mode (SEC-004)
     const localUser = process.env.LOCAL_ADMIN_USER;
     const localPass = process.env.LOCAL_ADMIN_PASSWORD;
 
     if (localUser && localPass && username === localUser && password === localPass) {
-      logger.info(`Local test account login: ${username}`);
+      if (process.env.NODE_ENV === 'production') {
+        logger.error('LOCAL_ADMIN_USER/PASSWORD are set in production — login denied. Remove these variables immediately.');
+        res.status(401).json({ error: 'Invalid credentials' });
+        return;
+      }
+      logger.warn(`Local test account login: ${username} (development mode only)`);
       ldapUser = {
         username: localUser,
         email: process.env.LOCAL_ADMIN_EMAIL || 'admin@test.local',

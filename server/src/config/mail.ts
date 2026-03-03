@@ -19,6 +19,12 @@ export function getMailConfig(fromOverride?: string): MailConfig {
 export function createMailTransporter(): nodemailer.Transporter {
   const config = getMailConfig();
 
+  // SEC-009: Enable TLS certificate verification in production.
+  // If the internal relay uses an internal CA cert, add it to NODE_EXTRA_CA_CERTS.
+  const rejectUnauthorized = process.env.NODE_ENV === 'production'
+    ? (process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false')  // default true in prod
+    : false;  // permissive in dev for self-signed relay certs
+
   return nodemailer.createTransport({
     host: config.host,
     port: config.port,
@@ -26,7 +32,7 @@ export function createMailTransporter(): nodemailer.Transporter {
     // Anonymous relay - no authentication required
     // The internal SMTP gateway handles relay authorization
     tls: {
-      rejectUnauthorized: false,
+      rejectUnauthorized,
     },
   });
 }

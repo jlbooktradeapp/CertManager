@@ -25,7 +25,10 @@ function getJwtSecret(): string {
 }
 
 function getJwtRefreshSecret(): string {
-  const secret = process.env.JWT_REFRESH_SECRET || (getJwtSecret() + '-refresh');
+  const secret = process.env.JWT_REFRESH_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('JWT_REFRESH_SECRET must be set to a secure value of at least 32 characters');
+  }
   return secret;
 }
 

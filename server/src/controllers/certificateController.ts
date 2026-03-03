@@ -4,6 +4,11 @@ import { getCertificateStats, updateCertificateStatuses, syncAllCAs } from '../s
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
+// SEC-007: Sync concurrency lock — prevents parallel sync operations
+let syncInProgress = false;
+let lastSyncTriggeredAt = 0;
+const SYNC_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between manual syncs
+
 export async function listCertificates(req: Request, res: Response): Promise<void> {
   try {
     const {
@@ -229,12 +234,32 @@ export async function getStats(req: Request, res: Response): Promise<void> {
 
 export async function triggerSync(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
+    // SEC-007: Prevent parallel syncs
+    if (syncInProgress) {
+      res.status(429).json({ error: 'Sync is already in progress. Please wait for it to complete.' });
+      return;
+    }
+
+    // SEC-007: Rate limit manual sync triggers (5 min cooldown)
+    const now = Date.now();
+    if (now - lastSyncTriggeredAt < SYNC_COOLDOWN_MS) {
+      const waitSec = Math.ceil((SYNC_COOLDOWN_MS - (now - lastSyncTriggeredAt)) / 1000);
+      res.status(429).json({ error: `Sync was recently triggered. Please wait ${waitSec} seconds before trying again.` });
+      return;
+    }
+
     logger.info(`Manual sync triggered by ${req.user?.username}`);
+    syncInProgress = true;
+    lastSyncTriggeredAt = now;
 
     // Run sync in background
-    syncAllCAs().catch(err => {
-      logger.error('Background sync error:', err);
-    });
+    syncAllCAs()
+      .catch(err => {
+        logger.error('Background sync error:', err);
+      })
+      .finally(() => {
+        syncInProgress = false;
+      });
 
     res.json({ message: 'Sync started' });
   } catch (error) {
