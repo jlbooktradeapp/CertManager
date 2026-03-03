@@ -317,43 +317,16 @@ async function generateApacheCSR(csr: any, req: AuthenticatedRequest, res: Respo
 }
 
 /**
- * IIS path: Generate CSR on the target server via certreq -new over PSRemoting.
+ * IIS path: Generate CSR on the target server using the IX509Enrollment COM API.
+ * This uses the same Microsoft CryptoAPI that certreq.exe wraps internally,
+ * but as a direct in-process call — no executable spawning, no console/UI
+ * dependency, works reliably in WinRM remote sessions.
  * Private key stays on the target server.
  */
 async function generateIISCSR(csr: any, req: AuthenticatedRequest, res: Response): Promise<void> {
-  const sans = csr.subjectAlternativeNames.map((san: string, i: number) => `DNS.${i + 1}=${san}`).join('\n');
   const subjectLine = buildSubjectLine(csr);
-
-  // Build dynamic KeyUsage bitmask for INF
   const kuBitmask = buildKeyUsageBitmask(csr.keyUsage || ['digitalSignature', 'keyEncipherment']);
-
-  // Build dynamic EKU OID lines for INF
   const ekuOids = buildEKUOids(csr.extendedKeyUsage || ['serverAuth', 'clientAuth']);
-
-  const infContent = `
-[Version]
-Signature="$Windows NT$"
-
-[NewRequest]
-Subject = "${subjectLine}"
-KeySpec = 1
-KeyLength = ${csr.keySize}
-Exportable = TRUE
-MachineKeySet = TRUE
-SMIME = FALSE
-PrivateKeyArchive = FALSE
-UserProtected = FALSE
-UseExistingKeySet = FALSE
-ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
-ProviderType = 12
-RequestType = PKCS10
-KeyUsage = 0x${kuBitmask}
-HashAlgorithm = ${csr.hashAlgorithm}
-
-${ekuOids.length > 0 ? `[EnhancedKeyUsageExtension]\n${ekuOids.map(oid => `OID=${oid}`).join('\n')}` : ''}
-
-${sans ? `[Extensions]\n2.5.29.17 = "{text}"\n_continue_ = "${sans.replace(/\n/g, '&')}"` : ''}
-`.trim();
 
   const targetServer = csr.targetServerId as any;
   const computerName = targetServer?.fqdn || 'localhost';
@@ -369,50 +342,131 @@ ${sans ? `[Extensions]\n2.5.29.17 = "{text}"\n_continue_ = "${sans.replace(/\n/g
 
   const safeId = String(csr._id);
 
-  // Base64 encode the INF content to avoid here-string parsing issues
-  // when the script is wrapped inside Invoke-Command -ScriptBlock { } for PSRemoting.
-  // Here-strings (@'...'@) break when passed via powershell.exe -Command.
-  const infBase64 = Buffer.from(infContent, 'utf-8').toString('base64');
+  // Build SAN and EKU strings to pass into PowerShell
+  // Using pipe delimiter since these values can't contain pipes
+  const sansJoined = csr.subjectAlternativeNames.join('|');
+  const ekuOidsJoined = ekuOids.join('|');
+
+  logger.info(`[IIS-CSR] Starting COM API generation for ${csr.commonName} on ${computerName} (safeId: ${safeId})`);
 
   const result = await executePowerShell({
     script: `
-      $infContent = [System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String('${infBase64}'))
-      $infPath = Join-Path $env:TEMP '${safeId}.inf'
-      $csrPath = Join-Path $env:TEMP '${safeId}.csr'
+      Write-Host '[STEP1] Starting IIS CSR generation via COM API'
 
-      $infContent | Out-File -FilePath $infPath -Encoding ASCII
+      # ── Create Private Key ──
+      Write-Host '[STEP2] Creating private key...'
+      $privateKey = New-Object -ComObject X509Enrollment.CX509PrivateKey
+      $privateKey.ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
+      $privateKey.KeySpec = 1           # XCN_AT_KEYEXCHANGE
+      $privateKey.Length = ${csr.keySize}
+      $privateKey.MachineContext = $true
+      $privateKey.ExportPolicy = 1      # XCN_NCRYPT_ALLOW_EXPORT_FLAG
+      $privateKey.Create()
+      Write-Host '[STEP3] Private key created in machine store'
 
-      try {
-        cmd /c "certreq -new \`"$infPath\`" \`"$csrPath\`" < NUL" 2>&1
+      # ── Create PKCS10 Request ──
+      $request = New-Object -ComObject X509Enrollment.CX509CertificateRequestPkcs10
+      $request.InitializeFromPrivateKey(2, $privateKey, "")  # 2 = MachineContext
+      Write-Host '[STEP4] PKCS10 request initialized'
 
-        if (Test-Path $csrPath) {
-          $csrContent = Get-Content $csrPath -Raw
-          # Clean up temp files on target
-          Remove-Item $csrPath -Force -ErrorAction SilentlyContinue
-          Remove-Item $infPath -Force -ErrorAction SilentlyContinue
-          $csrContent
-        } else {
-          throw "CSR generation failed - no CSR file produced by certreq"
+      # ── Set Subject DN ──
+      $dn = New-Object -ComObject X509Enrollment.CX500DistinguishedName
+      $dn.Encode('${sanitizePSString(subjectLine)}', 0)  # 0 = XCN_CERT_NAME_STR_NONE
+      $request.Subject = $dn
+      Write-Host '[STEP5] Subject set: ${sanitizePSString(subjectLine)}'
+
+      # ── Set Subject Alternative Names ──
+      $sansStr = '${sanitizePSString(sansJoined)}'
+      if ($sansStr -ne '') {
+        $sanExt = New-Object -ComObject X509Enrollment.CX509ExtensionAlternativeNames
+        $sanNames = New-Object -ComObject X509Enrollment.CAlternativeNames
+        foreach ($sanValue in $sansStr.Split('|')) {
+          if ($sanValue.Trim() -ne '') {
+            $san = New-Object -ComObject X509Enrollment.CAlternativeName
+            $san.InitializeFromString(3, $sanValue.Trim())  # 3 = XCN_CERT_ALT_NAME_DNS_STRING
+            $sanNames.Add($san)
+          }
         }
-      } catch {
-        # Clean up temp files even on failure
-        Remove-Item $infPath -Force -ErrorAction SilentlyContinue
-        Remove-Item $csrPath -Force -ErrorAction SilentlyContinue
-        throw $_
+        if ($sanNames.Count -gt 0) {
+          $sanExt.InitializeEncode($sanNames)
+          $request.X509Extensions.Add($sanExt)
+          Write-Host "[STEP6] SANs added: $($sanNames.Count) entries"
+        }
+      } else {
+        Write-Host '[STEP6] No SANs to add'
       }
+
+      # ── Set Key Usage ──
+      $kuExt = New-Object -ComObject X509Enrollment.CX509ExtensionKeyUsage
+      $kuExt.InitializeEncode(0x${kuBitmask})
+      $kuExt.Critical = $true
+      $request.X509Extensions.Add($kuExt)
+      Write-Host '[STEP7] Key Usage set: 0x${kuBitmask}'
+
+      # ── Set Enhanced Key Usage ──
+      $ekuStr = '${sanitizePSString(ekuOidsJoined)}'
+      if ($ekuStr -ne '') {
+        $ekuExt = New-Object -ComObject X509Enrollment.CX509ExtensionEnhancedKeyUsage
+        $ekuOids = New-Object -ComObject X509Enrollment.CObjectIds
+        foreach ($oidValue in $ekuStr.Split('|')) {
+          if ($oidValue.Trim() -ne '') {
+            $oid = New-Object -ComObject X509Enrollment.CObjectId
+            $oid.InitializeFromValue($oidValue.Trim())
+            $ekuOids.Add($oid)
+          }
+        }
+        if ($ekuOids.Count -gt 0) {
+          $ekuExt.InitializeEncode($ekuOids)
+          $request.X509Extensions.Add($ekuExt)
+          Write-Host "[STEP8] EKU added: $($ekuOids.Count) OIDs"
+        }
+      } else {
+        Write-Host '[STEP8] No EKU to add'
+      }
+
+      # ── Set Hash Algorithm ──
+      $hashOid = New-Object -ComObject X509Enrollment.CObjectId
+      $hashOid.InitializeFromAlgorithmName(1, 0, 0, '${sanitizePSString(csr.hashAlgorithm)}')
+      $request.HashAlgorithm = $hashOid
+      Write-Host '[STEP9] Hash algorithm set: ${csr.hashAlgorithm}'
+
+      # ── Create Enrollment and Generate CSR ──
+      Write-Host '[STEP10] Creating enrollment and generating CSR...'
+      $enrollment = New-Object -ComObject X509Enrollment.CX509Enrollment
+      $enrollment.InitializeFromRequest($request)
+      $csrText = $enrollment.CreateRequest(3)  # 3 = XCN_CRYPT_STRING_BASE64REQUESTHEADER (PEM)
+      Write-Host "[STEP11] CSR generated, length=$($csrText.Length)"
+
+      # Output the CSR PEM
+      $csrText
     `,
     remoteComputer: computerName !== 'localhost' ? computerName : undefined,
+    timeout: 120000, // 2 minutes — COM API is fast, but allow margin for WinRM
   });
 
+  logger.info(`[IIS-CSR] executePowerShell returned — success: ${result.success}, output length: ${result.output?.length || 0}, error: ${result.error || 'none'}`);
+
   if (result.success) {
-    csr.csrPEM = result.output;
+    // Extract just the PEM from the output — Write-Host debug lines are also in stdout
+    const csrPEM = extractPEMFromOutput(result.output);
+    if (!csrPEM) {
+      csr.errorMessage = 'CSR generated but PEM could not be extracted from output';
+      csr.status = 'failed';
+      updateWorkflowStep(csr, 'Generate CSR', 'failed', 'PEM extraction failed');
+      await csr.save();
+      logger.error(`[IIS-CSR] PEM extraction failed. Raw output: ${result.output}`);
+      res.status(500).json({ error: 'CSR generated but PEM extraction failed' });
+      return;
+    }
+
+    csr.csrPEM = csrPEM;
     csr.privateKeyLocation = `${computerName}:LocalMachine\\My`;
     csr.status = 'pending';
     updateWorkflowStep(csr, 'Generate CSR', 'completed');
     await csr.save();
 
     logger.info(`IIS CSR generated for ${csr.commonName} on ${computerName} by ${req.user?.username}`);
-    res.json({ message: 'CSR generated successfully', csrPEM: result.output });
+    res.json({ message: 'CSR generated successfully', csrPEM });
   } else {
     csr.errorMessage = result.error;
     csr.status = 'failed';
@@ -657,9 +711,10 @@ export async function installCSR(req: AuthenticatedRequest, res: Response): Prom
     await csr.save();
 
     try {
-      // Run certreq -accept on target server via PSRemoting.
-      // certreq -accept completes the pending request created by certreq -new,
-      // pairing the issued certificate with the private key on the target machine.
+      // Install the issued certificate on the target server via PSRemoting.
+      // Uses the IX509Enrollment COM API (InstallResponse) to pair the issued
+      // certificate with the pending request's private key — same CryptoAPI
+      // that certreq -accept uses internally, but without console dependency.
       const safeId = String(csr._id);
 
       // Base64 encode the cert PEM to avoid here-string parsing issues
@@ -668,21 +723,25 @@ export async function installCSR(req: AuthenticatedRequest, res: Response): Prom
 
       const result = await executePowerShell({
         script: `
-          $certContent = [System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String('${certBase64}'))
-          $certPath = Join-Path $env:TEMP '${safeId}.cer'
-          $certContent | Out-File -FilePath $certPath -Encoding ASCII -Force
+          Write-Host '[INSTALL-1] Starting certificate installation via COM API'
+          $certPEM = [System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String('${certBase64}'))
+          Write-Host "[INSTALL-2] Cert PEM decoded, length=$($certPEM.Length)"
 
-          # Accept the certificate to complete the pending request
-          $acceptOutput = cmd /c "certreq -accept \`"$certPath\`" < NUL" 2>&1
+          # Use IX509Enrollment COM API to install the response.
+          # This pairs the issued certificate with the pending request's private key
+          # that was created during CSR generation. The matching is done automatically
+          # by the CryptoAPI based on the public key in the certificate.
+          $enrollment = New-Object -ComObject X509Enrollment.CX509Enrollment
+          $enrollment.Initialize(2)  # 2 = MachineContext
+          Write-Host '[INSTALL-3] Enrollment initialized for machine context'
 
-          if ($LASTEXITCODE -ne 0) {
-            $errorMsg = $acceptOutput | Out-String
-            Remove-Item $certPath -Force -ErrorAction SilentlyContinue
-            throw "certreq -accept failed: $errorMsg"
-          }
-
-          # Clean up temp cert file
-          Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+          # InstallResponse parameters:
+          #   Restriction: 2 = AllowUntrustedCertificate (internal CA certs may not chain to a trusted root on this machine)
+          #   Response: the certificate PEM text
+          #   Encoding: 6 = XCN_CRYPT_STRING_BASE64_ANY (accepts PEM with or without headers)
+          #   Password: empty (not a PFX)
+          $enrollment.InstallResponse(2, $certPEM, 6, "")
+          Write-Host '[INSTALL-4] Certificate installed successfully'
 
           # Verify the certificate is now in the store
           $installedCert = Get-ChildItem -Path Cert:\\LocalMachine\\My | Where-Object {
@@ -690,6 +749,7 @@ export async function installCSR(req: AuthenticatedRequest, res: Response): Prom
           } | Sort-Object NotAfter -Descending | Select-Object -First 1
 
           if ($installedCert) {
+            Write-Host "[INSTALL-5] Certificate verified in store: $($installedCert.Thumbprint)"
             $result = @{
               Success = $true
               Thumbprint = $installedCert.Thumbprint
@@ -700,23 +760,24 @@ export async function installCSR(req: AuthenticatedRequest, res: Response): Prom
             }
             $result | ConvertTo-Json -Compress
           } else {
-            # Certificate may still have been accepted even if we can't find it by CN match
+            Write-Host '[INSTALL-5] Certificate installed but could not be verified by CN match'
             $result = @{
               Success = $true
-              Message = "certreq -accept completed but certificate could not be verified in store"
-              AcceptOutput = ($acceptOutput | Out-String).Trim()
+              Message = "Certificate installed via COM API but could not be verified in store by CN match"
             }
             $result | ConvertTo-Json -Compress
           }
         `,
         remoteComputer: computerName !== 'localhost' ? computerName : undefined,
-        timeout: 120000, // 2 minutes for remote operations
+        timeout: 120000, // 2 minutes
       });
 
       if (result.success) {
         let installResult: any = {};
         try {
-          installResult = JSON.parse(result.output);
+          // Extract JSON from mixed Write-Host output
+          const jsonOutput = extractJSONFromOutput(result.output);
+          installResult = JSON.parse(jsonOutput);
         } catch {
           installResult = { Success: true, Message: result.output };
         }
@@ -829,6 +890,24 @@ export async function deleteCSR(req: AuthenticatedRequest, res: Response): Promi
 }
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract PEM content from PowerShell output that may contain Write-Host debug lines.
+ * Looks for -----BEGIN ... REQUEST----- through -----END ... REQUEST----- markers.
+ */
+function extractPEMFromOutput(output: string): string | null {
+  const match = output.match(/-----BEGIN[\s\S]*?CERTIFICATE REQUEST-----[\s\S]*?-----END[\s\S]*?CERTIFICATE REQUEST-----/);
+  return match ? match[0].trim() : null;
+}
+
+/**
+ * Extract JSON from PowerShell output that may contain Write-Host debug lines.
+ * Looks for the first { ... } block in the output.
+ */
+function extractJSONFromOutput(output: string): string {
+  const match = output.match(/\{[\s\S]*\}/);
+  return match ? match[0] : output.trim();
+}
 
 function buildSubjectLine(csr: any): string {
   const parts: string[] = [`CN=${csr.commonName}`];

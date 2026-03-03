@@ -33,6 +33,8 @@ export interface ICSRRequest extends Document {
   privateKeyLocation?: string;
   issuedCertificateId?: mongoose.Types.ObjectId;
   issuedCertPEM?: string;
+  issuedThumbprint?: string;
+  issuedSerialNumber?: string;
   deliveredAt?: Date;
   requestedBy: string;
   requestedAt: Date;
@@ -105,6 +107,8 @@ const CSRRequestSchema = new Schema<ICSRRequest>({
   privateKeyLocation: String,
   issuedCertificateId: { type: Schema.Types.ObjectId, ref: 'Certificate' },
   issuedCertPEM: String,
+  issuedThumbprint: String,
+  issuedSerialNumber: String,
   deliveredAt: Date,
   requestedBy: { type: String, required: true },
   requestedAt: { type: Date, default: Date.now },

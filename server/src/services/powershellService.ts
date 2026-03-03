@@ -140,7 +140,19 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
 
     logger.debug('Executing PowerShell command', { scriptFile: scriptFile || '(inline)', remote: !!remoteComputer, tempFile: !!tempScriptPath });
 
+    // === DIAGNOSTIC LOGGING ===
+    if (tempScriptPath) {
+      logger.info(`[PS-DEBUG] Temp script path: ${tempScriptPath}`);
+    }
+    if (remoteComputer) {
+      logger.info(`[PS-DEBUG] Remote target: ${remoteComputer}`);
+    }
+    logger.info(`[PS-DEBUG] Spawn args: powershell.exe ${args.join(' ')}`);
+    logger.info(`[PS-DEBUG] Timeout: ${timeout}ms, windowsHide: true, stdio: [ignore, pipe, pipe]`);
+    // === END DIAGNOSTIC LOGGING ===
+
     const ps = spawn('powershell.exe', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],  // Close stdin to prevent certreq hanging
       windowsHide: true,
       timeout,
     });
@@ -149,17 +161,31 @@ export async function executePowerShell(options: PowerShellOptions): Promise<Pow
     let stderr = '';
 
     ps.stdout.on('data', (data) => {
-      stdout += data.toString();
+      const chunk = data.toString();
+      stdout += chunk;
+      // === DIAGNOSTIC: stream stdout in real-time ===
+      if (remoteComputer) {
+        logger.info(`[PS-STDOUT] ${chunk.trim()}`);
+      }
     });
 
     ps.stderr.on('data', (data) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      stderr += chunk;
+      // === DIAGNOSTIC: stream stderr in real-time ===
+      if (remoteComputer) {
+        logger.warn(`[PS-STDERR] ${chunk.trim()}`);
+      }
     });
 
     ps.on('close', (code) => {
-      // Clean up temp script file
-      if (tempScriptPath) {
+      logger.info(`[PS-DEBUG] Process exited with code: ${code}`);
+
+      // Preserve temp script on failure for manual debugging
+      if (tempScriptPath && code === 0) {
         try { fs.unlinkSync(tempScriptPath); } catch {}
+      } else if (tempScriptPath) {
+        logger.error(`[PS-DEBUG] FAILED — temp script preserved at: ${tempScriptPath}`);
       }
 
       if (code === 0) {
