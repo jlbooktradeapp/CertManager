@@ -25,6 +25,34 @@ function validateSAN(san: string): boolean {
   return /^[a-zA-Z0-9.*@_-]+(\.[a-zA-Z0-9*_-]+)*$/.test(san) && san.length <= 253;
 }
 
+// SEC-024: Sanitize error messages before storing or returning to clients.
+// Strips file paths, UNC paths, stack traces, and internal server details
+// while preserving the meaningful error description.
+function sanitizeErrorMessage(error: string | undefined): string {
+  if (!error) return 'An unexpected error occurred. Check server logs for details.';
+  let sanitized = error;
+  // Remove Windows file paths (C:\..., D:\...)
+  sanitized = sanitized.replace(/[A-Z]:\\[^\s,;)}\]]+/gi, '[path]');
+  // Remove UNC paths (\\server\share\...)
+  sanitized = sanitized.replace(/\\\\[^\s,;)}\]]+/gi, '[path]');
+  // Remove Unix paths (/tmp/..., /var/...)
+  sanitized = sanitized.replace(/\/(?:tmp|var|home|usr|etc|mnt|opt)[^\s,;)}\]]*/gi, '[path]');
+  // Remove PowerShell stack traces (At line:X char:Y, + ~~~, etc.)
+  sanitized = sanitized.replace(/At line:\d+ char:\d+.*/gs, '');
+  sanitized = sanitized.replace(/\+\s+~+.*/g, '');
+  sanitized = sanitized.replace(/\+ CategoryInfo\s+:.*/gs, '');
+  sanitized = sanitized.replace(/\+ FullyQualifiedErrorId\s+:.*/gs, '');
+  // Remove internal hostnames/FQDNs that look like server names (e.g., TSCERAPPPRD02.domain.local)
+  sanitized = sanitized.replace(/\b[A-Z]{2,}[A-Z0-9-]*\d+\.[a-zA-Z0-9.-]+\.(local|internal|corp|lan)\b/gi, '[server]');
+  // Collapse multiple whitespace/newlines
+  sanitized = sanitized.replace(/\n\s*\n/g, '\n').replace(/\s{2,}/g, ' ').trim();
+  // Truncate overly long messages
+  if (sanitized.length > 500) {
+    sanitized = sanitized.substring(0, 497) + '...';
+  }
+  return sanitized || 'An unexpected error occurred. Check server logs for details.';
+}
+
 // ─── LIST / GET / CREATE / UPDATE ───────────────────────────────────────────────
 
 export async function listCSRs(req: Request, res: Response): Promise<void> {
@@ -307,12 +335,12 @@ async function generateApacheCSR(csr: any, req: AuthenticatedRequest, res: Respo
     logger.info(`Apache CSR generated for ${csr.commonName} by ${req.user?.username}`);
     res.json({ message: 'CSR generated via OpenSSL', csrPEM: result.csrPEM });
   } else {
-    csr.errorMessage = result.error;
+    csr.errorMessage = sanitizeErrorMessage(result.error);
     csr.status = 'failed';
     updateWorkflowStep(csr, 'Generate CSR', 'failed', result.error);
     await csr.save();
 
-    res.status(500).json({ error: 'OpenSSL CSR generation failed', details: result.error });
+    res.status(500).json({ error: 'OpenSSL CSR generation failed. Check server logs for details.' });
   }
 }
 
@@ -468,12 +496,12 @@ async function generateIISCSR(csr: any, req: AuthenticatedRequest, res: Response
     logger.info(`IIS CSR generated for ${csr.commonName} on ${computerName} by ${req.user?.username}`);
     res.json({ message: 'CSR generated successfully', csrPEM });
   } else {
-    csr.errorMessage = result.error;
+    csr.errorMessage = sanitizeErrorMessage(result.error);
     csr.status = 'failed';
     updateWorkflowStep(csr, 'Generate CSR', 'failed', result.error);
     await csr.save();
 
-    res.status(500).json({ error: 'Failed to generate CSR', details: result.error });
+    res.status(500).json({ error: 'Failed to generate CSR. Check server logs for details.' });
   }
 }
 
@@ -568,20 +596,20 @@ export async function submitCSRToCA(req: AuthenticatedRequest, res: Response): P
           requestId: caResponse.RequestId,
         });
       } else {
-        csr.errorMessage = caResponse.Error || 'Unknown CA response';
+        csr.errorMessage = sanitizeErrorMessage(caResponse.Error || 'Unknown CA response');
         csr.status = 'failed';
         updateWorkflowStep(csr, 'Submit to CA', 'failed', caResponse.Error);
         await csr.save();
 
-        res.status(500).json({ error: 'CA submission failed', details: caResponse.Error });
+        res.status(500).json({ error: 'CA submission failed. Check server logs for details.' });
       }
     } else {
-      csr.errorMessage = result.error;
+      csr.errorMessage = sanitizeErrorMessage(result.error);
       csr.status = 'failed';
       updateWorkflowStep(csr, 'Submit to CA', 'failed', result.error);
       await csr.save();
 
-      res.status(500).json({ error: 'Failed to submit CSR', details: result.error });
+      res.status(500).json({ error: 'Failed to submit CSR. Check server logs for details.' });
     }
   } catch (error) {
     logger.error('Submit CSR error:', error);
@@ -646,11 +674,11 @@ export async function deliverCSR(req: AuthenticatedRequest, res: Response): Prom
       res.json({ message: 'Certificate delivered successfully' });
     } else {
       csr.status = 'issued'; // Revert so delivery can be retried
-      csr.errorMessage = result.error;
+      csr.errorMessage = sanitizeErrorMessage(result.error);
       updateWorkflowStep(csr, 'Deliver Certificate', 'failed', result.error);
       await csr.save();
 
-      res.status(500).json({ error: 'Certificate delivery failed', details: result.error });
+      res.status(500).json({ error: 'Certificate delivery failed. Check server logs for details.' });
     }
   } catch (error) {
     logger.error('Deliver CSR error:', error);
@@ -830,21 +858,21 @@ export async function installCSR(req: AuthenticatedRequest, res: Response): Prom
         });
       } else {
         csr.status = 'issued'; // Revert so install can be retried
-        csr.errorMessage = result.error;
+        csr.errorMessage = sanitizeErrorMessage(result.error);
         updateWorkflowStep(csr, 'Install Certificate', 'failed', result.error);
         await csr.save();
 
         logger.error(`IIS certificate install failed for ${csr.commonName} on ${computerName}: ${result.error}`);
-        res.status(500).json({ error: 'Certificate installation failed', details: result.error });
+        res.status(500).json({ error: 'Certificate installation failed. Check server logs for details.' });
       }
     } catch (installError: any) {
       csr.status = 'issued'; // Revert so install can be retried
-      csr.errorMessage = installError.message;
+      csr.errorMessage = sanitizeErrorMessage(installError.message);
       updateWorkflowStep(csr, 'Install Certificate', 'failed', installError.message);
       await csr.save();
 
       logger.error(`IIS certificate install error for ${csr.commonName}: ${installError.message}`);
-      res.status(500).json({ error: 'Certificate installation failed', details: installError.message });
+      res.status(500).json({ error: 'Certificate installation failed. Check server logs for details.' });
     }
   } catch (error) {
     logger.error('Install CSR error:', error);

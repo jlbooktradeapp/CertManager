@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import AdmZip from 'adm-zip';
 import { createMailTransporter, getMailConfig } from '../config/mail';
 import { deletePrivateKey, getKeyPath } from './opensslService';
 import { logger } from '../utils/logger';
@@ -10,8 +11,8 @@ export interface DeliveryResult {
 
 /**
  * Deliver an Apache certificate via email.
- * Sends the signed certificate (.cer) and private key (.key) as attachments,
- * then immediately deletes the private key from disk.
+ * Zips the signed certificate (.cer) and private key (.key) into a single .zip
+ * attachment to avoid email filter blocking, then deletes the private key from disk.
  */
 export async function deliverApacheCertificate(options: {
   csrId: string;
@@ -48,6 +49,12 @@ export async function deliverApacheCertificate(options: {
 
     const html = buildDeliveryEmail(commonName, requestedBy);
 
+    // Zip the .cer and .key files to avoid email filter blocking
+    const zip = new AdmZip();
+    zip.addFile(`${safeFilename}.cer`, Buffer.from(certPEM, 'utf-8'));
+    zip.addFile(`${safeFilename}.key`, Buffer.from(keyPEM, 'utf-8'));
+    const zipBuffer = zip.toBuffer();
+
     await transporter.sendMail({
       from: config.from,
       to: recipients.join(', '),
@@ -55,14 +62,9 @@ export async function deliverApacheCertificate(options: {
       html,
       attachments: [
         {
-          filename: `${safeFilename}.cer`,
-          content: certPEM,
-          contentType: 'application/x-x509-ca-cert',
-        },
-        {
-          filename: `${safeFilename}.key`,
-          content: keyPEM,
-          contentType: 'application/x-pem-file',
+          filename: `${safeFilename}.zip`,
+          content: zipBuffer,
+          contentType: 'application/zip',
         },
       ],
     });
@@ -115,20 +117,21 @@ function buildDeliveryEmail(commonName: string, requestedBy: string): string {
         </tr>
       </table>
 
-      <h3 style="color: #333;">Attachments</h3>
+      <h3 style="color: #333;">Attachment</h3>
+      <p>The attached .zip file contains:</p>
       <ul>
         <li><strong>.cer</strong> — The signed certificate. Install this on your web server.</li>
         <li><strong>.key</strong> — The private key. Store this securely and never share it.</li>
       </ul>
 
       <div style="background: #fff3e0; border-left: 4px solid #ff9800; padding: 12px; margin: 16px 0;">
-        <strong>⚠ Security Notice:</strong> The private key attached to this email is the only copy.
+        <strong>⚠ Security Notice:</strong> The private key included in this zip is the only copy.
         It has been permanently deleted from the CertManager server. Store it securely and do not
         forward this email.
       </div>
 
       <h3 style="color: #333;">Apache Installation</h3>
-      <p>Add the following to your Apache virtual host configuration:</p>
+      <p>Extract the zip and add the following to your Apache virtual host configuration:</p>
       <pre style="background: #f5f5f5; padding: 12px; border-radius: 4px; font-size: 13px;">
 SSLCertificateFile    /path/to/${safeCN}.cer
 SSLCertificateKeyFile /path/to/${safeCN}.key</pre>

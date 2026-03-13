@@ -1,17 +1,13 @@
 import { Request, Response } from 'express';
-import { authenticateUser, LdapUserInfo } from '../services/ldapService';
 import { User, UserRole } from '../models/User';
 import { RefreshToken } from '../models/RefreshToken';
 import { generateToken, generateRefreshToken, verifyRefreshToken, AuthenticatedRequest } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
-// Map AD groups to application roles
-const groupRoleMapping: Record<string, UserRole> = {
-  'CertManager-Admins': 'admin',
-  'CertManager-Operators': 'operator',
-  'CertManager-Viewers': 'viewer',
-};
-
+/**
+ * Local development login — ONLY available when NODE_ENV !== 'production'
+ * and LOCAL_ADMIN_USER/PASSWORD are set. In production, all auth goes through SAML SSO.
+ */
 export async function login(req: Request, res: Response): Promise<void> {
   try {
     const { username, password } = req.body;
@@ -21,69 +17,41 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    let ldapUser: LdapUserInfo | null = null;
-
-    // Local test account — ONLY available in development mode (SEC-004)
+    // SEC-004: Local test account — ONLY available in development mode
     const localUser = process.env.LOCAL_ADMIN_USER;
     const localPass = process.env.LOCAL_ADMIN_PASSWORD;
 
-    if (localUser && localPass && username === localUser && password === localPass) {
-      if (process.env.NODE_ENV === 'production') {
-        logger.error('LOCAL_ADMIN_USER/PASSWORD are set in production — login denied. Remove these variables immediately.');
-        res.status(401).json({ error: 'Invalid credentials' });
-        return;
-      }
-      logger.warn(`Local test account login: ${username} (development mode only)`);
-      ldapUser = {
-        username: localUser,
-        email: process.env.LOCAL_ADMIN_EMAIL || 'admin@test.local',
-        displayName: process.env.LOCAL_ADMIN_DISPLAYNAME || 'Local Admin',
-        distinguishedName: `CN=${localUser},OU=Local,DC=test,DC=local`,
-        memberOf: ['CN=CertManager-Admins,OU=Groups,DC=test,DC=local'],
-      };
-    } else {
-      // Authenticate against AD
-      ldapUser = await authenticateUser(username, password);
+    if (process.env.NODE_ENV === 'production') {
+      logger.error('Local login attempted in production mode — denied. Use SAML SSO.');
+      res.status(401).json({ error: 'Local login is disabled in production. Use SSO to sign in.' });
+      return;
     }
 
-    if (!ldapUser) {
+    if (!localUser || !localPass) {
+      res.status(401).json({ error: 'No local credentials configured. Set LOCAL_ADMIN_USER/PASSWORD in .env for development.' });
+      return;
+    }
+
+    if (username !== localUser || password !== localPass) {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
-    // Map AD groups to roles
-    const roles: UserRole[] = [];
-    for (const group of ldapUser.memberOf) {
-      const groupName = extractGroupName(group);
-      if (groupRoleMapping[groupName]) {
-        roles.push(groupRoleMapping[groupName]);
-      }
-    }
+    logger.warn(`Local test account login: ${username} (development mode only)`);
 
-    // Default to viewer if no roles assigned
-    if (roles.length === 0) {
-      roles.push('viewer');
-    }
-
-    // Find or create user in database
-    let user = await User.findOne({ username: ldapUser.username });
+    // Find or create the local dev user
+    let user = await User.findOne({ username: localUser });
 
     if (user) {
-      // Update user info from AD
-      user.email = ldapUser.email;
-      user.displayName = ldapUser.displayName;
-      user.distinguishedName = ldapUser.distinguishedName;
-      user.roles = roles;
       user.lastLogin = new Date();
       await user.save();
     } else {
-      // Create new user
       user = await User.create({
-        username: ldapUser.username,
-        email: ldapUser.email,
-        displayName: ldapUser.displayName,
-        distinguishedName: ldapUser.distinguishedName,
-        roles,
+        username: localUser,
+        email: process.env.LOCAL_ADMIN_EMAIL || 'admin@test.local',
+        displayName: process.env.LOCAL_ADMIN_DISPLAYNAME || 'Local Admin',
+        distinguishedName: `CN=${localUser},OU=Local,DC=test,DC=local`,
+        roles: ['admin'] as UserRole[],
         lastLogin: new Date(),
       });
     }
@@ -92,7 +60,6 @@ export async function login(req: Request, res: Response): Promise<void> {
     const accessToken = generateToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // Store refresh token in database for revocation support
     const refreshExpiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
     const expiresMs = parseDuration(refreshExpiresIn);
     await RefreshToken.create({
@@ -133,7 +100,6 @@ export async function refresh(req: Request, res: Response): Promise<void> {
     const storedToken = await RefreshToken.findOne({ token: refreshToken });
 
     if (!storedToken || storedToken.revoked) {
-      // If a revoked token is reused, revoke all tokens for this user (possible theft)
       if (storedToken?.revoked) {
         await RefreshToken.updateMany(
           { userId: storedToken.userId },
@@ -162,7 +128,6 @@ export async function refresh(req: Request, res: Response): Promise<void> {
     const newAccessToken = generateToken(user);
     const newRefreshToken = generateRefreshToken(user);
 
-    // Store new refresh token
     const refreshExpiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
     const expiresMs = parseDuration(refreshExpiresIn);
     await RefreshToken.create({
@@ -183,7 +148,6 @@ export async function refresh(req: Request, res: Response): Promise<void> {
 
 export async function logout(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    // Revoke all refresh tokens for this user
     if (req.user) {
       await RefreshToken.updateMany(
         { userId: req.user._id, revoked: false },
@@ -218,22 +182,13 @@ export async function getCurrentUser(req: AuthenticatedRequest, res: Response): 
   });
 }
 
-function extractGroupName(dn: string): string {
-  const match = dn.match(/CN=([^,]+)/i);
-  return match ? match[1] : '';
-}
-
 function parseDuration(duration: string): number {
   const match = duration.match(/^(\d+)(ms|s|m|h|d)$/);
-  if (!match) return 7 * 24 * 60 * 60 * 1000; // default 7 days
+  if (!match) return 7 * 24 * 60 * 60 * 1000;
   const value = parseInt(match[1], 10);
   const unit = match[2];
   const multipliers: Record<string, number> = {
-    ms: 1,
-    s: 1000,
-    m: 60 * 1000,
-    h: 60 * 60 * 1000,
-    d: 24 * 60 * 60 * 1000,
+    ms: 1, s: 1000, m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000,
   };
   return value * (multipliers[unit] || 1);
 }

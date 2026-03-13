@@ -1,6 +1,7 @@
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import passport from 'passport';
 import rateLimit from 'express-rate-limit';
 import { logger } from './utils/logger';
 
@@ -15,6 +16,9 @@ import applicationRoutes from './routes/applications';
 import cleanupRoutes from './routes/cleanup';
 
 const app: Application = express();
+
+// Trust nginx reverse proxy for X-Forwarded-For headers
+app.set('trust proxy', 1);
 
 // SEC-013: Security middleware with explicit CSP configuration
 app.use(helmet({
@@ -56,6 +60,9 @@ app.use(cors({
 // Body parsing with size limits
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Initialize Passport (used for SAML SSO)
+app.use(passport.initialize());
 
 // Request logging
 app.use((req: Request, _res: Response, next: NextFunction) => {

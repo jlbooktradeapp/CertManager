@@ -3,6 +3,7 @@ dotenv.config();
 
 import app from './app';
 import { connectDatabase } from './config/database';
+import { initializeSaml } from './config/saml';
 import { logger } from './utils/logger';
 import { initializeScheduler } from './services/schedulerService';
 
@@ -31,6 +32,17 @@ function validateRequiredEnv(): void {
   if (process.env.NODE_ENV === 'production' && process.env.LOCAL_ADMIN_USER) {
     logger.error('LOCAL_ADMIN_USER is set in production. This account is disabled in production mode — remove these variables.');
   }
+  // SAML SSO configuration check
+  const samlVars = ['SAML_ENTRY_POINT', 'SAML_ISSUER', 'SAML_CALLBACK_URL'];
+  const missingSaml = samlVars.filter(key => !process.env[key]);
+  const hasCert = process.env.SAML_CERT || process.env.SAML_CERT_PATH;
+  if (!hasCert) missingSaml.push('SAML_CERT or SAML_CERT_PATH');
+  if (missingSaml.length > 0 && missingSaml.length < samlVars.length) {
+    logger.warn(`Partial SAML configuration detected. Missing: ${missingSaml.join(', ')}. SAML SSO will not be available.`);
+  }
+  if (process.env.NODE_ENV === 'production' && missingSaml.length > 0) {
+    logger.error(`SAML SSO is not fully configured in production. Missing: ${missingSaml.join(', ')}. Users will not be able to log in.`);
+  }
 }
 
 async function startServer(): Promise<void> {
@@ -41,6 +53,9 @@ async function startServer(): Promise<void> {
     // Connect to MongoDB
     await connectDatabase();
     logger.info('Connected to MongoDB');
+
+    // Initialize SAML SSO strategy
+    initializeSaml();
 
     // Initialize scheduled jobs
     initializeScheduler();

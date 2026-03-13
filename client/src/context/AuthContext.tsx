@@ -21,6 +21,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const initAuth = async () => {
+      // Check for SAML callback tokens in URL params
+      const params = new URLSearchParams(window.location.search);
+      const accessToken = params.get('accessToken');
+      const refreshToken = params.get('refreshToken');
+
+      if (accessToken && refreshToken) {
+        // Store tokens from SAML callback redirect
+        localStorage.setItem('accessToken', accessToken);
+        localStorage.setItem('refreshToken', refreshToken);
+        // Clean the URL — remove tokens from the address bar
+        window.history.replaceState({}, '', '/');
+      }
+
+      // Validate existing token
       const token = localStorage.getItem('accessToken');
       if (token) {
         try {
