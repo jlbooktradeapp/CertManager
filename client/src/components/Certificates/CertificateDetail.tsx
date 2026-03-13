@@ -19,6 +19,11 @@ import {
   TextField,
   Autocomplete,
   Tooltip,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  FormHelperText,
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
@@ -30,10 +35,11 @@ import {
   Business as VendorIcon,
   Clear as ClearIcon,
   Replay as ReissuedIcon,
+  Refresh as ReissueIcon,
 } from '@mui/icons-material';
 import { format, differenceInDays } from 'date-fns';
 import { useState } from 'react';
-import { getCertificate, deleteCertificate, updateCertificate } from '../../services/certificates';
+import { getCertificate, deleteCertificate, updateCertificate, reissueCertificate } from '../../services/certificates';
 import api from '../../services/api';
 import { Application, PaginatedResponse } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -55,6 +61,12 @@ export default function CertificateDetail() {
   const [newEmail, setNewEmail] = useState('');
   const [emailError, setEmailError] = useState('');
   const [appSearchInput, setAppSearchInput] = useState('');
+
+  // Re-issue dialog state
+  const [reissueDialogOpen, setReissueDialogOpen] = useState(false);
+  const [reissueServerType, setReissueServerType] = useState<'apache' | 'iis'>('apache');
+  const [reissueEmails, setReissueEmails] = useState('');
+  const [reissueEmailError, setReissueEmailError] = useState('');
 
   const { data: cert, isLoading, error } = useQuery({
     queryKey: ['certificate', id],
@@ -104,6 +116,19 @@ export default function CertificateDetail() {
     },
   });
 
+  const reissueMutation = useMutation({
+    mutationFn: () => {
+      const emails = reissueServerType === 'apache'
+        ? reissueEmails.split(',').map(e => e.trim()).filter(Boolean)
+        : [];
+      return reissueCertificate(id!, { serverType: reissueServerType, deliveryEmails: emails });
+    },
+    onSuccess: (data) => {
+      setReissueDialogOpen(false);
+      navigate(`/csr/${data.csrId}`);
+    },
+  });
+
   const handleAddRecipient = () => {
     const email = newEmail.trim();
     if (!email) return;
@@ -114,6 +139,31 @@ export default function CertificateDetail() {
     updateRecipientsMutation.mutate([...current, email]);
     setNewEmail('');
     setEmailError('');
+  };
+
+  const handleOpenReissueDialog = () => {
+    // Pre-populate server type: prefer explicit serverType, then infer from deployedLocations
+    let detectedType: 'apache' | 'iis' = 'iis'; // Default to IIS for TUHS Windows estate
+    if (cert?.serverType) {
+      detectedType = cert.serverType;
+    }
+    setReissueServerType(detectedType);
+    setReissueEmails('');
+    setReissueEmailError('');
+    setReissueDialogOpen(true);
+  };
+
+  const handleReissueSubmit = () => {
+    if (reissueServerType === 'apache') {
+      const emails = reissueEmails.split(',').map(e => e.trim()).filter(Boolean);
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const invalid = emails.filter(e => !emailRegex.test(e));
+      if (invalid.length > 0) {
+        setReissueEmailError(`Invalid address(es): ${invalid.join(', ')}`);
+        return;
+      }
+    }
+    reissueMutation.mutate();
   };
 
   const handleRemoveRecipient = (email: string) => {
@@ -148,20 +198,32 @@ export default function CertificateDetail() {
           {cert.commonName}
         </Typography>
         <Chip label={cert.status} color={statusColors[cert.status]} sx={{ textTransform: 'capitalize' }} />
-        {isOperator && cert.status !== 'reissued' && (
+        {isOperator && cert.status !== 'reissued' && cert.status !== 'revoked' && (
           <Button
-            color="info"
-            variant="outlined"
-            startIcon={<ReissuedIcon />}
-            onClick={() => {
-              if (confirm(`Mark "${cert.commonName}" as reissued? This will flag it for cleanup.`)) {
-                markReissuedMutation.mutate();
-              }
-            }}
-            disabled={markReissuedMutation.isPending}
+            color="primary"
+            variant="contained"
+            startIcon={<ReissueIcon />}
+            onClick={handleOpenReissueDialog}
           >
-            Mark Reissued
+            Re-issue Certificate
           </Button>
+        )}
+        {isOperator && cert.status !== 'reissued' && (
+          <Tooltip title="Manually flag this certificate as already reissued (does not create a new certificate)">
+            <Button
+              color="info"
+              variant="outlined"
+              startIcon={<ReissuedIcon />}
+              onClick={() => {
+                if (confirm(`Mark "${cert.commonName}" as reissued? This will flag it for cleanup.`)) {
+                  markReissuedMutation.mutate();
+                }
+              }}
+              disabled={markReissuedMutation.isPending}
+            >
+              Mark Reissued
+            </Button>
+          </Tooltip>
         )}
         {isOperator && (
           <Button color="error" startIcon={<DeleteIcon />} onClick={() => setDeleteDialogOpen(true)}>
@@ -400,7 +462,88 @@ export default function CertificateDetail() {
           </Card>
         </Grid>
 
-        {/* Deployments - Hidden until Phase 2 (WinRM/gMSA) */}
+        {/* Deployed Locations - Discovery Results */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="h6">Deployed Locations</Typography>
+                {isOperator && (
+                  <Tooltip title="Probe this certificate's hostname and SANs over TLS to discover where it's currently being served">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        api.post(`/certificates/discover?certId=${cert._id}`).then(() => {
+                          queryClient.invalidateQueries({ queryKey: ['certificate', id] });
+                        });
+                      }}
+                    >
+                      Run Discovery
+                    </Button>
+                  </Tooltip>
+                )}
+              </Box>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                TLS probe results showing where this certificate is actively being served. A <strong>match</strong> means
+                the live cert fingerprint matches this record. <strong>Mismatch</strong> means a different cert is being served —
+                likely a renewed cert that hasn't propagated, or a different cert on that host.
+              </Typography>
+
+              {(!cert.deployedLocations || cert.deployedLocations.length === 0) ? (
+                <Typography color="textSecondary" variant="body2">
+                  No discovery data yet. Click "Run Discovery" to probe this certificate's hostname and SANs.
+                </Typography>
+              ) : (
+                <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <Box component="thead">
+                    <Box component="tr" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+                      {['Hostname', 'Port', 'Status', 'Served Thumbprint', 'Last Probed'].map(h => (
+                        <Box component="th" key={h} sx={{ textAlign: 'left', pb: 1, pr: 2, typography: 'caption', fontWeight: 600, color: 'text.secondary' }}>{h}</Box>
+                      ))}
+                    </Box>
+                  </Box>
+                  <Box component="tbody">
+                    {cert.deployedLocations.map((loc: any, idx: number) => (
+                      <Box component="tr" key={idx} sx={{ borderBottom: '1px solid', borderColor: 'divider', '&:last-child': { borderBottom: 0 } }}>
+                        <Box component="td" sx={{ py: 1, pr: 2 }}>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{loc.hostname}</Typography>
+                          {loc.resolvedIP && <Typography variant="caption" color="text.secondary">{loc.resolvedIP}</Typography>}
+                        </Box>
+                        <Box component="td" sx={{ py: 1, pr: 2 }}>
+                          <Typography variant="body2">{loc.port}</Typography>
+                        </Box>
+                        <Box component="td" sx={{ py: 1, pr: 2 }}>
+                          <Chip
+                            size="small"
+                            label={loc.matchStatus || 'unknown'}
+                            color={
+                              loc.matchStatus === 'match' ? 'success' :
+                              loc.matchStatus === 'mismatch' ? 'warning' :
+                              loc.matchStatus === 'error' ? 'error' : 'default'
+                            }
+                          />
+                        </Box>
+                        <Box component="td" sx={{ py: 1, pr: 2 }}>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                            {loc.servedThumbprint
+                              ? loc.servedThumbprint.match(/.{1,8}/g)?.join(' ') ?? loc.servedThumbprint
+                              : '—'}
+                          </Typography>
+                        </Box>
+                        <Box component="td" sx={{ py: 1 }}>
+                          <Typography variant="body2" color="text.secondary">
+                            {loc.lastProbeAt ? format(new Date(loc.lastProbeAt), 'MMM d, h:mm a') : '—'}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
 
         {/* Notification Recipients */}
         <Grid item xs={12}>
@@ -448,6 +591,76 @@ export default function CertificateDetail() {
         <DialogActions>
           <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
           <Button color="error" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>Remove</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Re-issue Dialog */}
+      <Dialog open={reissueDialogOpen} onClose={() => setReissueDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Re-issue Certificate</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 3 }}>
+            This creates a new CSR pre-filled with <strong>{cert.commonName}</strong>'s current attributes.
+            You'll be taken to the CSR wizard to review, generate, and submit to the CA.
+          </Typography>
+
+          {/* Discovery context — show matched locations if we have them */}
+          {cert.deployedLocations && cert.deployedLocations.filter((l: any) => l.matchStatus === 'match').length > 0 && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Discovery found this certificate actively serving on:{' '}
+              {cert.deployedLocations
+                .filter((l: any) => l.matchStatus === 'match')
+                .map((l: any) => `${l.hostname}:${l.port}`)
+                .join(', ')}
+              . After re-issue, run discovery again to confirm the new cert is deployed.
+            </Alert>
+          )}
+
+          <FormControl fullWidth sx={{ mb: 3 }}>
+            <InputLabel>Server Type</InputLabel>
+            <Select
+              value={reissueServerType}
+              label="Server Type"
+              onChange={(e) => setReissueServerType(e.target.value as 'apache' | 'iis')}
+            >
+              <MenuItem value="apache">Apache — generate CSR locally, deliver cert+key by email</MenuItem>
+              <MenuItem value="iis">IIS — generate CSR on target server, install automatically</MenuItem>
+            </Select>
+            {!cert.serverType && (
+              <FormHelperText>
+                No server type on record — defaulting to IIS. Change if this is an Apache/Linux cert.
+              </FormHelperText>
+            )}
+          </FormControl>
+
+          {reissueServerType === 'apache' && (
+            <TextField
+              fullWidth
+              label="Delivery email addresses"
+              placeholder="user@tuhs.org, other@tuhs.org"
+              value={reissueEmails}
+              onChange={(e) => { setReissueEmails(e.target.value); setReissueEmailError(''); }}
+              error={!!reissueEmailError}
+              helperText={reissueEmailError || 'Comma-separated. The cert + key zip will be emailed here when issued.'}
+              multiline
+              rows={2}
+            />
+          )}
+
+          {reissueMutation.isError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {(reissueMutation.error as any)?.response?.data?.error || 'Failed to create re-issue request'}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReissueDialogOpen(false)} disabled={reissueMutation.isPending}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleReissueSubmit}
+            disabled={reissueMutation.isPending}
+          >
+            {reissueMutation.isPending ? 'Creating...' : 'Create Re-issue CSR'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

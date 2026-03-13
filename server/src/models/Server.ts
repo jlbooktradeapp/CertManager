@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export type ServerRole = 'IIS' | 'Exchange' | 'ADFS' | 'RDS' | 'SQL' | 'Other';
+export type ServerRole = 'IIS' | 'Exchange' | 'ADFS' | 'RDS' | 'SQL' | 'F5' | 'Other';
 
 export interface IServer extends Document {
   hostname: string;
@@ -30,7 +30,7 @@ const ServerSchema = new Schema<IServer>({
   operatingSystem: { type: String, default: 'Windows Server' },
   roles: [{
     type: String,
-    enum: ['IIS', 'Exchange', 'ADFS', 'RDS', 'SQL', 'Other'],
+    enum: ['IIS', 'Exchange', 'ADFS', 'RDS', 'SQL', 'F5', 'Other'],
   }],
   domainJoined: { type: Boolean, default: true },
   domain: String,

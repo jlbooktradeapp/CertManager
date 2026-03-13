@@ -1,11 +1,10 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
   Typography,
   Card,
-  CardContent,
-  Grid,
   Chip,
   Button,
   Dialog,
@@ -23,37 +22,60 @@ import {
   Checkbox,
   ListItemText,
   OutlinedInput,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  InputAdornment,
+  Tooltip,
 } from '@mui/material';
 import {
   Add as AddIcon,
-  Refresh as RefreshIcon,
   Delete as DeleteIcon,
   CheckCircle as OnlineIcon,
   Cancel as OfflineIcon,
+  Help as UnknownIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { Server, PaginatedResponse } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
-const serverRoles = ['IIS', 'Exchange', 'ADFS', 'RDS', 'SQL', 'Other'];
+const serverRoles = ['IIS', 'F5', 'Exchange', 'ADFS', 'RDS', 'SQL', 'Other'];
+
+const roleColors: Record<string, 'default' | 'primary' | 'secondary' | 'warning' | 'info'> = {
+  IIS:      'primary',
+  F5:       'warning',
+  Exchange: 'secondary',
+  ADFS:     'info',
+  RDS:      'info',
+  SQL:      'secondary',
+  Other:    'default',
+};
 
 export default function ServerList() {
   const queryClient = useQueryClient();
-  const { isAdmin, isOperator } = useAuth();
+  const navigate    = useNavigate();
+  const { isAdmin } = useAuth();
+  const [search, setSearch]       = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    hostname: '',
-    fqdn: '',
-    ipAddress: '',
+  const [formData, setFormData]   = useState({
+    hostname:        '',
+    fqdn:            '',
+    ipAddress:       '',
     operatingSystem: 'Windows Server 2022',
-    roles: [] as string[],
-    domain: '',
+    roles:           [] as string[],
+    domain:          '',
   });
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['servers'],
+    queryKey: ['servers', search],
     queryFn: async () => {
-      const response = await api.get<PaginatedResponse<Server>>('/servers');
+      const params = new URLSearchParams({ limit: '200' });
+      const response = await api.get<PaginatedResponse<Server>>(`/servers?${params}`);
       return response.data;
     },
   });
@@ -70,16 +92,6 @@ export default function ServerList() {
     },
   });
 
-  const testMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const response = await api.post(`/servers/${id}/test`);
-      return response.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['servers'] });
-    },
-  });
-
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       await api.delete(`/servers/${id}`);
@@ -89,21 +101,18 @@ export default function ServerList() {
     },
   });
 
-  const resetForm = () => {
-    setFormData({
-      hostname: '',
-      fqdn: '',
-      ipAddress: '',
-      operatingSystem: 'Windows Server 2022',
-      roles: [],
-      domain: '',
-    });
-  };
+  const resetForm = () => setFormData({
+    hostname: '', fqdn: '', ipAddress: '',
+    operatingSystem: 'Windows Server 2022', roles: [], domain: '',
+  });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    createMutation.mutate(formData);
-  };
+  // Client-side filter by search
+  const servers = (data?.data ?? []).filter(s =>
+    !search ||
+    s.hostname.toLowerCase().includes(search.toLowerCase()) ||
+    s.fqdn.toLowerCase().includes(search.toLowerCase()) ||
+    s.ipAddress.includes(search)
+  );
 
   if (isLoading) {
     return (
@@ -128,181 +137,171 @@ export default function ServerList() {
         )}
       </Box>
 
-      <Grid container spacing={3}>
-        {data?.data.map((server) => (
-          <Grid item xs={12} md={6} lg={4} key={server._id}>
-            <Card>
-              <CardContent>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                  <Box>
-                    <Typography variant="h6">{server.hostname}</Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      {server.fqdn}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    {server.status === 'online' ? (
-                      <OnlineIcon color="success" fontSize="small" />
-                    ) : server.status === 'offline' ? (
-                      <OfflineIcon color="error" fontSize="small" />
-                    ) : null}
-                    <Chip
-                      label={server.status}
-                      color={server.status === 'online' ? 'success' : server.status === 'offline' ? 'error' : 'default'}
-                      size="small"
-                    />
-                  </Box>
-                </Box>
+      <TextField
+        placeholder="Search by hostname, FQDN, or IP..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        size="small"
+        sx={{ mb: 3, minWidth: 320 }}
+        InputProps={{
+          startAdornment: (
+            <InputAdornment position="start">
+              <SearchIcon />
+            </InputAdornment>
+          ),
+        }}
+      />
 
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant="caption" color="textSecondary">
-                    IP: {server.ipAddress}
-                  </Typography>
-                  {server.domain && (
-                    <Typography variant="caption" color="textSecondary" sx={{ ml: 2 }}>
-                      Domain: {server.domain}
-                    </Typography>
-                  )}
-                </Box>
+      {servers.length > 0 ? (
+        <TableContainer component={Paper}>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell><strong>Server</strong></TableCell>
+                <TableCell><strong>IP Address</strong></TableCell>
+                <TableCell><strong>Roles</strong></TableCell>
+                <TableCell><strong>Certificates</strong></TableCell>
+                <TableCell><strong>Status</strong></TableCell>
+                {isAdmin && <TableCell align="right"><strong>Actions</strong></TableCell>}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {servers.map((server) => {
+                const StatusIcon = server.status === 'online'
+                  ? <OnlineIcon color="success" fontSize="small" sx={{ mr: 0.5, verticalAlign: 'middle' }} />
+                  : server.status === 'offline'
+                  ? <OfflineIcon color="error" fontSize="small" sx={{ mr: 0.5, verticalAlign: 'middle' }} />
+                  : <UnknownIcon color="disabled" fontSize="small" sx={{ mr: 0.5, verticalAlign: 'middle' }} />;
 
-                <Box sx={{ mb: 2 }}>
-                  {server.roles.map((role) => (
-                    <Chip
-                      key={role}
-                      label={role}
-                      variant="outlined"
-                      size="small"
-                      sx={{ mr: 0.5, mb: 0.5 }}
-                    />
-                  ))}
-                </Box>
-
-                {server.remoteManagement && (
-                  <Box sx={{ mb: 2 }}>
-                    <Chip
-                      label={server.remoteManagement.winRMEnabled ? 'WinRM OK' : 'WinRM Off'}
-                      color={server.remoteManagement.winRMEnabled ? 'success' : 'default'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </Box>
-                )}
-
-                <Typography variant="caption" color="textSecondary" display="block">
-                  Certificates: {server.certificates?.length || 0}
-                </Typography>
-
-                <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
-                  {isOperator && (
-                    <Button
-                      size="small"
-                      startIcon={<RefreshIcon />}
-                      onClick={() => testMutation.mutate(server._id)}
-                      disabled={testMutation.isPending}
-                    >
-                      Test
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => {
-                        if (confirm(`Delete server "${server.hostname}"?`)) {
-                          deleteMutation.mutate(server._id);
-                        }
-                      }}
-                    >
-                      <DeleteIcon />
-                    </IconButton>
-                  )}
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
-        ))}
-
-        {data?.data.length === 0 && (
-          <Grid item xs={12}>
-            <Alert severity="info">
-              No servers configured. Add a server to start managing certificates.
-            </Alert>
-          </Grid>
-        )}
-      </Grid>
+                return (
+                  <TableRow
+                    key={server._id}
+                    hover
+                    sx={{ cursor: 'pointer' }}
+                    onClick={() => navigate(`/servers/${server._id}`)}
+                  >
+                    <TableCell>
+                      <Typography variant="body1" fontWeight={500}>{server.hostname}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                        {server.fqdn}
+                      </Typography>
+                      {server.domain && (
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {server.domain}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{server.ipAddress}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {server.roles?.map((role) => (
+                          <Chip
+                            key={role}
+                            label={role}
+                            size="small"
+                            color={roleColors[role] ?? 'default'}
+                            variant="outlined"
+                          />
+                        ))}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={`${server.certificates?.length ?? 0} cert(s)`}
+                        size="small"
+                        color={(server.certificates?.length ?? 0) > 0 ? 'primary' : 'default'}
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        {StatusIcon}
+                        <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
+                          {server.status}
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                    {isAdmin && (
+                      <TableCell align="right">
+                        <Tooltip title="Remove server from tracking">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`Remove server "${server.hostname}" from tracking?`)) {
+                                deleteMutation.mutate(server._id);
+                              }
+                            }}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      ) : (
+        <Alert severity="info">
+          {search
+            ? `No servers match "${search}".`
+            : 'No servers yet. Run discovery to automatically detect servers from active certificates, or add one manually.'}
+        </Alert>
+      )}
 
       {/* Add Server Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <form onSubmit={handleSubmit}>
-          <DialogTitle>Add Server</DialogTitle>
-          <DialogContent>
-            <TextField
-              fullWidth
-              label="Hostname"
-              value={formData.hostname}
-              onChange={(e) => setFormData({ ...formData, hostname: e.target.value })}
-              margin="normal"
-              required
-              placeholder="server01"
-            />
-            <TextField
-              fullWidth
-              label="FQDN"
-              value={formData.fqdn}
-              onChange={(e) => setFormData({ ...formData, fqdn: e.target.value })}
-              margin="normal"
-              required
-              placeholder="server01.domain.local"
-            />
-            <TextField
-              fullWidth
-              label="IP Address"
-              value={formData.ipAddress}
-              onChange={(e) => setFormData({ ...formData, ipAddress: e.target.value })}
-              margin="normal"
-              required
-              placeholder="192.168.1.100"
-            />
-            <TextField
-              fullWidth
-              label="Operating System"
-              value={formData.operatingSystem}
-              onChange={(e) => setFormData({ ...formData, operatingSystem: e.target.value })}
-              margin="normal"
-            />
-            <FormControl fullWidth margin="normal">
-              <InputLabel>Roles</InputLabel>
-              <Select
-                multiple
-                value={formData.roles}
-                onChange={(e) => setFormData({ ...formData, roles: e.target.value as string[] })}
-                input={<OutlinedInput label="Roles" />}
-                renderValue={(selected) => selected.join(', ')}
-              >
-                {serverRoles.map((role) => (
-                  <MenuItem key={role} value={role}>
-                    <Checkbox checked={formData.roles.indexOf(role) > -1} />
-                    <ListItemText primary={role} />
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <TextField
-              fullWidth
-              label="Domain"
-              value={formData.domain}
-              onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
-              margin="normal"
-              placeholder="domain.local"
-            />
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => { setDialogOpen(false); resetForm(); }}>Cancel</Button>
-            <Button type="submit" variant="contained" disabled={createMutation.isPending}>
-              Add Server
-            </Button>
-          </DialogActions>
-        </form>
+      <Dialog open={dialogOpen} onClose={() => { setDialogOpen(false); resetForm(); }} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Server</DialogTitle>
+        <DialogContent>
+          <TextField fullWidth label="Hostname" value={formData.hostname}
+            onChange={(e) => setFormData({ ...formData, hostname: e.target.value })}
+            margin="normal" required placeholder="server01" />
+          <TextField fullWidth label="FQDN" value={formData.fqdn}
+            onChange={(e) => setFormData({ ...formData, fqdn: e.target.value })}
+            margin="normal" required placeholder="server01.tuhs.prv" />
+          <TextField fullWidth label="IP Address" value={formData.ipAddress}
+            onChange={(e) => setFormData({ ...formData, ipAddress: e.target.value })}
+            margin="normal" required placeholder="10.0.0.1" />
+          <TextField fullWidth label="Operating System" value={formData.operatingSystem}
+            onChange={(e) => setFormData({ ...formData, operatingSystem: e.target.value })}
+            margin="normal" />
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Roles</InputLabel>
+            <Select
+              multiple
+              value={formData.roles}
+              onChange={(e) => setFormData({ ...formData, roles: e.target.value as string[] })}
+              input={<OutlinedInput label="Roles" />}
+              renderValue={(selected) => selected.join(', ')}
+            >
+              {serverRoles.map((role) => (
+                <MenuItem key={role} value={role}>
+                  <Checkbox checked={formData.roles.indexOf(role) > -1} />
+                  <ListItemText primary={role} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <TextField fullWidth label="Domain" value={formData.domain}
+            onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+            margin="normal" placeholder="tuhs.prv" />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setDialogOpen(false); resetForm(); }}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => createMutation.mutate(formData)}
+            disabled={createMutation.isPending || !formData.hostname || !formData.fqdn || !formData.ipAddress}
+          >
+            Add Server
+          </Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );

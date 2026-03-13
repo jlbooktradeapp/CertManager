@@ -46,7 +46,11 @@ export async function getServer(req: Request, res: Response): Promise<void> {
     const { id } = req.params;
 
     const server = await Server.findById(id)
-      .populate('certificates');
+      .populate({
+        path: 'certificates',
+        populate: { path: 'applicationId', select: 'name status' },
+        select: 'commonName serialNumber validTo status thumbprint serverType issuer applicationId deployedLocations',
+      });
 
     if (!server) {
       res.status(404).json({ error: 'Server not found' });

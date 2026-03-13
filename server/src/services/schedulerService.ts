@@ -5,10 +5,13 @@ import path from 'path';
 import { logger } from '../utils/logger';
 import { sendExpirationNotifications } from './notificationService';
 import { syncAllCAs } from './certificateService';
+import { runDiscovery } from './discoveryService';
+import { NotificationSettings } from '../models/NotificationSettings';
 
 let notificationJob: cron.ScheduledTask | null = null;
 let syncJob: cron.ScheduledTask | null = null;
 let cleanupJob: cron.ScheduledTask | null = null;
+let discoveryJob: cron.ScheduledTask | null = null;
 
 export function initializeScheduler(): void {
   // Run expiration check daily at 8 AM
@@ -48,6 +51,31 @@ export function initializeScheduler(): void {
   });
 
   logger.info('Orphan file cleanup job scheduled (every 15 minutes)');
+
+  // Discovery: run daily at 2 AM ET — probe cert CN/SANs to find where certs are deployed
+  // Only runs if discoveryConfig.enabled = true in settings
+  discoveryJob = cron.schedule('0 2 * * *', async () => {
+    try {
+      const settings = await NotificationSettings.findOne().select('discoveryConfig');
+      if (!settings?.discoveryConfig?.enabled) {
+        logger.debug('Scheduled discovery skipped — disabled in settings');
+        return;
+      }
+      logger.info('Running scheduled certificate discovery');
+      const stats = await runDiscovery();
+      logger.info(
+        `Scheduled discovery complete: probed=${stats.probed}, matched=${stats.matched}, ` +
+        `mismatched=${stats.mismatched}, rebound=${stats.reboundFound}`
+      );
+    } catch (error) {
+      logger.error('Scheduled discovery failed:', error);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'America/New_York',
+  });
+
+  logger.info('Discovery job scheduled (daily at 2:00 AM ET, runs when enabled in Settings)');
 }
 
 export function stopScheduler(): void {
@@ -64,6 +92,11 @@ export function stopScheduler(): void {
   if (cleanupJob) {
     cleanupJob.stop();
     cleanupJob = null;
+  }
+
+  if (discoveryJob) {
+    discoveryJob.stop();
+    discoveryJob = null;
   }
 
   logger.info('Scheduler stopped');

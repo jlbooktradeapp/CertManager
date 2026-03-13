@@ -20,7 +20,7 @@ import {
   TableRow,
   CircularProgress,
 } from '@mui/material';
-import { Delete as DeleteIcon, Send as SendIcon, Add as AddIcon, CalendarMonth as CalendarIcon, Summarize as DigestIcon } from '@mui/icons-material';
+import { Delete as DeleteIcon, Send as SendIcon, Add as AddIcon, CalendarMonth as CalendarIcon, Summarize as DigestIcon, Search as ScanIcon } from '@mui/icons-material';
 import api from '../../services/api';
 import { getTemplateNames } from '../../services/certificates';
 
@@ -52,6 +52,21 @@ interface NotificationSettings {
     digestDay: number;
     lastDigestSent?: string;
   };
+  discoveryConfig: {
+    enabled: boolean;
+    probePorts: number[];
+    probeTimeoutMs: number;
+    concurrency: number;
+    f5IpRanges: string[];
+    lastRunAt?: string;
+    lastRunStats?: {
+      probed: number;
+      matched: number;
+      mismatched: number;
+      errors: number;
+      reboundFound: number;
+    };
+  };
 }
 
 export default function Settings() {
@@ -79,6 +94,8 @@ export default function Settings() {
   useEffect(() => {
     if (settings) {
       setFormData(settings);
+      setPortsInput((settings.discoveryConfig?.probePorts ?? [443, 8443]).join(', '));
+      setF5RangesInput((settings.discoveryConfig?.f5IpRanges ?? []).join(', '));
     }
   }, [settings]);
 
@@ -112,6 +129,16 @@ export default function Settings() {
       return response.data;
     },
   });
+
+  const discoveryMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post('/certificates/discover');
+      return response.data;
+    },
+  });
+
+  const [portsInput, setPortsInput] = useState('');
+  const [f5RangesInput, setF5RangesInput] = useState('');
 
   const handleSave = () => {
     if (formData) {
@@ -732,6 +759,152 @@ export default function Settings() {
                     )}
                   </>
                 )}
+              </Grid>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Discovery Configuration */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <ScanIcon color="primary" />
+                  <Typography variant="h6">Certificate Discovery</Typography>
+                </Box>
+                <Button
+                  variant="outlined"
+                  startIcon={discoveryMutation.isPending ? <CircularProgress size={16} /> : <ScanIcon />}
+                  onClick={() => discoveryMutation.mutate()}
+                  disabled={discoveryMutation.isPending}
+                  size="small"
+                >
+                  {discoveryMutation.isPending ? 'Starting...' : 'Run Discovery Now'}
+                </Button>
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Probes each certificate's hostname and SANs over TLS to discover where certs are actively
+                deployed and whether the served certificate matches what's in the CA. Runs automatically
+                daily at 2 AM when enabled. Also detects rebound — certificates marked as reissued that
+                are still serving.
+              </Typography>
+
+              {formData?.discoveryConfig?.lastRunAt && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Last run: {format(new Date(formData.discoveryConfig.lastRunAt), 'MMM d, yyyy h:mm a')}
+                  {formData.discoveryConfig.lastRunStats && (
+                    <> — probed {formData.discoveryConfig.lastRunStats.probed}, matched {formData.discoveryConfig.lastRunStats.matched}, mismatched {formData.discoveryConfig.lastRunStats.mismatched}{formData.discoveryConfig.lastRunStats.reboundFound > 0 ? `, ⚠️ ${formData.discoveryConfig.lastRunStats.reboundFound} rebound` : ''}</>
+                  )}
+                </Alert>
+              )}
+              {discoveryMutation.isSuccess && (
+                <Alert severity="success" sx={{ mb: 2 }}>Discovery scan started — results will appear on certificate records as probes complete.</Alert>
+              )}
+              {discoveryMutation.isError && (
+                <Alert severity="error" sx={{ mb: 2 }}>Failed to start discovery scan.</Alert>
+              )}
+
+              <Divider sx={{ mb: 2 }} />
+
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={formData?.discoveryConfig?.enabled ?? false}
+                        onChange={(e) => setFormData(prev => prev ? {
+                          ...prev,
+                          discoveryConfig: { ...prev.discoveryConfig, enabled: e.target.checked },
+                        } : prev)}
+                      />
+                    }
+                    label="Enable scheduled daily discovery (runs at 2:00 AM)"
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Probe Ports"
+                    helperText="Comma-separated port numbers (e.g. 443, 8443)"
+                    fullWidth
+                    value={portsInput}
+                    onChange={(e) => {
+                      setPortsInput(e.target.value);
+                      const parsed = e.target.value
+                        .split(',')
+                        .map((s) => parseInt(s.trim(), 10))
+                        .filter((n) => !isNaN(n) && n > 0 && n <= 65535);
+                      if (parsed.length > 0) {
+                        setFormData(prev => prev ? {
+                          ...prev,
+                          discoveryConfig: { ...prev.discoveryConfig, probePorts: parsed },
+                        } : prev);
+                      }
+                    }}
+                    size="small"
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={3}>
+                  <TextField
+                    label="Probe Timeout (ms)"
+                    helperText="1000–30000 ms per host"
+                    fullWidth
+                    type="number"
+                    inputProps={{ min: 1000, max: 30000, step: 500 }}
+                    value={formData?.discoveryConfig?.probeTimeoutMs ?? 5000}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val)) setFormData(prev => prev ? {
+                        ...prev,
+                        discoveryConfig: { ...prev.discoveryConfig, probeTimeoutMs: val },
+                      } : prev);
+                    }}
+                    size="small"
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={3}>
+                  <TextField
+                    label="Concurrency"
+                    helperText="Parallel probes (1–50)"
+                    fullWidth
+                    type="number"
+                    inputProps={{ min: 1, max: 50 }}
+                    value={formData?.discoveryConfig?.concurrency ?? 10}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val)) setFormData(prev => prev ? {
+                        ...prev,
+                        discoveryConfig: { ...prev.discoveryConfig, concurrency: val },
+                      } : prev);
+                    }}
+                    size="small"
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    label="F5 Load Balancer IP Ranges"
+                    helperText="Comma-separated CIDRs or exact IPs (e.g. 10.50.0.0/16, 192.168.10.5). Any discovered server whose IP matches will be classified as F5."
+                    fullWidth
+                    value={f5RangesInput}
+                    onChange={(e) => {
+                      setF5RangesInput(e.target.value);
+                      const parsed = e.target.value
+                        .split(',')
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      setFormData(prev => prev ? {
+                        ...prev,
+                        discoveryConfig: { ...prev.discoveryConfig, f5IpRanges: parsed },
+                      } : prev);
+                    }}
+                    placeholder="10.50.0.0/16, 10.51.0.0/16"
+                    size="small"
+                  />
+                </Grid>
               </Grid>
             </CardContent>
           </Card>

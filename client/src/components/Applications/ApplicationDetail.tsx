@@ -25,16 +25,29 @@ import {
   Business as VendorIcon,
   Email as EmailIcon,
   Security as CertIcon,
+  Dns as ServerIcon,
 } from '@mui/icons-material';
 import { format, differenceInDays } from 'date-fns';
 import api from '../../services/api';
 import { Application } from '../../types';
 
-const certStatusColors: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
-  active: 'success',
+const certStatusColors: Record<string, 'success' | 'warning' | 'error' | 'default' | 'info'> = {
+  active:   'success',
   expiring: 'warning',
-  expired: 'error',
-  revoked: 'default',
+  expired:  'error',
+  revoked:  'default',
+  reissued: 'info',
+  rebound:  'error',
+};
+
+const roleColors: Record<string, 'default' | 'primary' | 'secondary' | 'warning' | 'info'> = {
+  IIS:      'primary',
+  F5:       'warning',
+  Exchange: 'secondary',
+  ADFS:     'info',
+  RDS:      'info',
+  SQL:      'secondary',
+  Other:    'default',
 };
 
 export default function ApplicationDetail() {
@@ -230,6 +243,80 @@ export default function ApplicationDetail() {
             </CardContent>
           </Card>
         </Grid>
+
+        {/* Servers — derived from cert deployedTo relationships */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <ServerIcon color="primary" />
+                <Typography variant="h6">
+                  Servers
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                Servers where this application's certificates are actively deployed, discovered via TLS probe.
+              </Typography>
+
+              {(() => {
+                // Derive unique servers from all cert deployedTo entries
+                const serverMap = new Map<string, { serverId: string; serverName: string; certs: string[] }>();
+                for (const cert of (app.certificates || [])) {
+                  for (const d of ((cert as any).deployedTo || [])) {
+                    const sid = d.serverId?.toString() ?? d.serverName;
+                    if (!sid) continue;
+                    if (!serverMap.has(sid)) {
+                      serverMap.set(sid, { serverId: sid, serverName: d.serverName, certs: [] });
+                    }
+                    serverMap.get(sid)!.certs.push(cert.commonName);
+                  }
+                }
+                const servers = Array.from(serverMap.values());
+
+                if (servers.length === 0) {
+                  return (
+                    <Alert severity="info">
+                      No servers linked yet. Run discovery to automatically detect where this application's certificates are deployed.
+                    </Alert>
+                  );
+                }
+
+                return (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {servers.map((s) => (
+                      <Box
+                        key={s.serverId}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 2,
+                          p: 1.5,
+                          borderRadius: 1,
+                          border: '1px solid',
+                          borderColor: 'divider',
+                          cursor: 'pointer',
+                          '&:hover': { bgcolor: 'action.hover' },
+                        }}
+                        onClick={() => navigate(`/servers/${s.serverId}`)}
+                      >
+                        <ServerIcon fontSize="small" color="action" />
+                        <Box sx={{ flexGrow: 1 }}>
+                          <Typography variant="body2" fontWeight={500} sx={{ fontFamily: 'monospace' }}>
+                            {s.serverName}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {s.certs.length} cert{s.certs.length !== 1 ? 's' : ''}: {s.certs.join(', ')}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        </Grid>
+
       </Grid>
     </Box>
   );

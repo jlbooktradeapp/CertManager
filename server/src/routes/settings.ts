@@ -8,6 +8,7 @@ import {
   getSyncSettings,
   updateSyncSettings,
 } from '../controllers/settingsController';
+import { updateDiscoverySettings } from '../controllers/discoveryController';
 import { authenticate } from '../middleware/auth';
 import { adminOnly, anyAuthenticated } from '../middleware/rbac';
 
@@ -36,5 +37,8 @@ router.get('/sync', anyAuthenticated, getSyncSettings);
 
 // PUT /api/settings/sync - Update sync settings
 router.put('/sync', adminOnly, updateSyncSettings);
+
+// PUT /api/settings/discovery - Update discovery configuration
+router.put('/discovery', adminOnly, updateDiscoverySettings);
 
 export default router;

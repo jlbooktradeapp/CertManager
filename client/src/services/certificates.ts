@@ -63,3 +63,22 @@ export async function updateCertificate(id: string, data: { notificationRecipien
   const response = await api.put<Certificate>(`/certificates/${id}`, data);
   return response.data;
 }
+
+export interface ReissueOptions {
+  serverType: 'apache' | 'iis';
+  deliveryEmails?: string[];
+  targetCAId?: string;
+  targetServerId?: string;
+}
+
+export interface ReissueResponse {
+  message: string;
+  csrId: string;
+  commonName: string;
+  serverType: string;
+}
+
+export async function reissueCertificate(id: string, options: ReissueOptions): Promise<ReissueResponse> {
+  const response = await api.post<ReissueResponse>(`/certificates/${id}/reissue`, options);
+  return response.data;
+}

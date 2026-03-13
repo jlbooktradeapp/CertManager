@@ -75,7 +75,7 @@ export async function getApplication(req: Request, res: Response): Promise<void>
 
     // Query certificates assigned to this application
     const certificates = await Certificate.find({ applicationId: id })
-      .select('commonName serialNumber thumbprint status validFrom validTo templateName issuer')
+      .select('commonName serialNumber thumbprint status validFrom validTo templateName issuer deployedTo serverType')
       .sort({ validTo: 1 })
       .populate('issuer.caId', 'name displayName');
 

@@ -10,6 +10,7 @@ import CSRList from './components/CSR/CSRList';
 import CSRWizard from './components/CSR/CSRWizard';
 import CSRDetail from './components/CSR/CSRDetail';
 import ServerList from './components/Servers/ServerList';
+import ServerDetail from './components/Servers/ServerDetail';
 import Settings from './components/Settings/Settings';
 import ApplicationList from './components/Applications/ApplicationList';
 import ApplicationDetail from './components/Applications/ApplicationDetail';
@@ -79,6 +80,7 @@ function App() {
         <Route path="csr/new" element={<OperatorRoute><CSRWizard /></OperatorRoute>} />
         <Route path="csr/:id" element={<CSRDetail />} />
         <Route path="servers" element={<ServerList />} />
+        <Route path="servers/:id" element={<ServerDetail />} />
         <Route path="applications" element={<ApplicationList />} />
         <Route path="applications/:id" element={<ApplicationDetail />} />
         <Route path="cleanup" element={<OperatorRoute><Cleanup /></OperatorRoute>} />

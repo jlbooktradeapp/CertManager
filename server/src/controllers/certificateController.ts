@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { Certificate } from '../models/Certificate';
+import { CSRRequest } from '../models/CSRRequest';
+import { CertificateAuthority } from '../models/CertificateAuthority';
 import { getCertificateStats, updateCertificateStatuses, syncAllCAs } from '../services/certificateService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -387,5 +389,118 @@ export async function deleteCertificate(req: AuthenticatedRequest, res: Response
   } catch (error) {
     logger.error('Delete certificate error:', error);
     res.status(500).json({ error: 'Failed to delete certificate' });
+  }
+}
+
+/**
+ * POST /api/certificates/:id/reissue
+ *
+ * Creates a pre-populated CSR draft copied from an existing certificate's attributes.
+ * Returns the new CSRRequest ID so the frontend can navigate directly into the CSR wizard
+ * (generate → submit → deliver/install) — the operator can review and adjust before proceeding.
+ *
+ * Accepts optional overrides in the request body:
+ *   serverType     — 'apache' | 'iis'  (defaults to cert.serverType, then 'apache')
+ *   targetCAId     — override which CA to submit to (defaults to the issuing CA if issuance-enabled)
+ *   targetServerId — IIS only: which server to install on
+ *   deliveryEmails — Apache only: who receives the cert+key zip
+ */
+export async function reissueCertificate(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+
+    const cert = await Certificate.findById(id).populate('issuer.caId');
+    if (!cert) {
+      res.status(404).json({ error: 'Certificate not found' });
+      return;
+    }
+
+    if (cert.status === 'revoked') {
+      res.status(400).json({ error: 'Cannot re-issue a revoked certificate' });
+      return;
+    }
+
+    const {
+      serverType = cert.serverType || 'apache',
+      targetCAId,
+      targetServerId,
+      deliveryEmails = [],
+    } = req.body;
+
+    if (!['apache', 'iis'].includes(serverType)) {
+      res.status(400).json({ error: 'serverType must be "apache" or "iis"' });
+      return;
+    }
+
+    // Resolve which CA to use — prefer body override, fall back to original issuer
+    let resolvedCAId = targetCAId || null;
+    if (!resolvedCAId && cert.issuer?.caId) {
+      const issuingCA = await CertificateAuthority.findById(cert.issuer.caId);
+      if (issuingCA?.issuanceEnabled) {
+        resolvedCAId = issuingCA._id;
+      }
+    }
+
+    // If a CA was explicitly specified, validate it
+    if (targetCAId) {
+      const ca = await CertificateAuthority.findById(targetCAId);
+      if (!ca) {
+        res.status(400).json({ error: 'Certificate authority not found' });
+        return;
+      }
+      if (!ca.issuanceEnabled) {
+        res.status(400).json({ error: `CA "${ca.name}" is not enabled for certificate issuance` });
+        return;
+      }
+    }
+
+    const workflowSteps = serverType === 'apache'
+      ? [
+          { step: 'Generate CSR',       status: 'pending' as const },
+          { step: 'Submit to CA',        status: 'pending' as const },
+          { step: 'Deliver Certificate', status: 'pending' as const },
+        ]
+      : [
+          { step: 'Generate CSR',        status: 'pending' as const },
+          { step: 'Submit to CA',        status: 'pending' as const },
+          { step: 'Install Certificate', status: 'pending' as const },
+        ];
+
+    const csr = await CSRRequest.create({
+      commonName:              cert.commonName,
+      subjectAlternativeNames: cert.subjectAlternativeNames || [],
+      subject:                 cert.subject || {},
+      serverType,
+      keySize:                 cert.keySize || 2048,
+      keyAlgorithm:            'RSA',
+      hashAlgorithm:           'SHA256',
+      keyUsage:                cert.keyUsage?.length ? cert.keyUsage : ['digitalSignature', 'keyEncipherment'],
+      extendedKeyUsage:        cert.extendedKeyUsage?.length ? cert.extendedKeyUsage : ['serverAuth', 'clientAuth'],
+      // templateCN is what certreq -attrib needs — fall back through templateRawValue → templateName
+      templateName:            cert.templateCN || cert.templateRawValue || cert.templateName || 'WebServer',
+      targetCAId:              resolvedCAId || undefined,
+      targetServerId:          serverType === 'iis' ? (targetServerId || undefined) : undefined,
+      applicationId:           cert.applicationId || undefined,
+      deliveryEmails:          serverType === 'apache' ? deliveryEmails : [],
+      status:                  'draft',
+      requestedBy:             req.user?.username || 'unknown',
+      requestedAt:             new Date(),
+      workflowSteps,
+    });
+
+    logger.info(
+      `Re-issue CSR draft created for ${cert.commonName} ` +
+      `by ${req.user?.username} (csrId: ${csr._id}, originalCertId: ${cert._id})`
+    );
+
+    res.status(201).json({
+      message:    'Re-issue draft created. Open the CSR to generate and submit.',
+      csrId:      csr._id,
+      commonName: cert.commonName,
+      serverType: csr.serverType,
+    });
+  } catch (error) {
+    logger.error('Re-issue certificate error:', error);
+    res.status(500).json({ error: 'Failed to create re-issue request' });
   }
 }

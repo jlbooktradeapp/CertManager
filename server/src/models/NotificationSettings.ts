@@ -42,6 +42,21 @@ export interface INotificationSettings extends Document {
     digestDay: number;
     lastDigestSent?: Date;
   };
+  discoveryConfig: {
+    enabled: boolean;
+    probePorts: number[];
+    probeTimeoutMs: number;
+    concurrency: number;
+    f5IpRanges: string[];
+    lastRunAt?: Date;
+    lastRunStats?: {
+      probed: number;
+      matched: number;
+      mismatched: number;
+      errors: number;
+      reboundFound: number;
+    };
+  };
 }
 
 const ThresholdSchema = new Schema<IThreshold>({
@@ -114,6 +129,21 @@ const NotificationSettingsSchema = new Schema<INotificationSettings>({
     digestFrequency: { type: String, enum: ['daily', 'weekly'], default: 'weekly' },
     digestDay: { type: Number, default: 1, min: 0, max: 6 }, // 0=Sunday, 1=Monday
     lastDigestSent: { type: Date },
+  },
+  discoveryConfig: {
+    enabled:          { type: Boolean, default: false },
+    probePorts:       { type: [Number], default: [443, 8443] },
+    probeTimeoutMs:   { type: Number, default: 5000, min: 1000, max: 30000 },
+    concurrency:      { type: Number, default: 10, min: 1, max: 50 },
+    f5IpRanges:       { type: [String], default: [] },
+    lastRunAt:        { type: Date },
+    lastRunStats: {
+      probed:        { type: Number, default: 0 },
+      matched:       { type: Number, default: 0 },
+      mismatched:    { type: Number, default: 0 },
+      errors:        { type: Number, default: 0 },
+      reboundFound:  { type: Number, default: 0 },
+    },
   },
 }, {
   timestamps: true,
