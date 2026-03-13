@@ -281,10 +281,14 @@ export async function runDiscovery(singleCertId?: string): Promise<DiscoveryStat
       lastProbeAt:      new Date(),
     });
 
-    // ── Auto-set serverType if not set ───────────────────────────────────
-    if (!matchedCert.serverType) {
-      (matchedCert as any).serverType = 'iis';
-    }
+    // ── Set serverType based on the server role ──────────────────────────
+    // F5 and IIS both terminate TLS for IIS backends → 'iis'
+    // Anything else (unknown role, non-Windows host) → 'apache'
+    // Always overwrite — discovery is the authoritative source for this field.
+    const derivedServerType = (server.roles?.includes('F5') || server.roles?.includes('IIS'))
+      ? 'iis'
+      : 'apache';
+    (matchedCert as any).serverType = derivedServerType;
 
     // ── Rebound detection ────────────────────────────────────────────────
     // The cert being served is marked reissued — old cert still live

@@ -282,6 +282,20 @@ export default function CertificateDetail() {
                     <Typography variant="body2">{cert.encryptionType}</Typography>
                   </Grid>
                 )}
+                <Grid item xs={6}>
+                  <Typography variant="caption" color="textSecondary">Web Server Type</Typography>
+                  {cert.serverType ? (
+                    <Chip
+                      size="small"
+                      label={cert.serverType === 'iis' ? 'IIS / F5' : 'Apache'}
+                      color={cert.serverType === 'iis' ? 'primary' : 'default'}
+                      variant="outlined"
+                      sx={{ mt: 0.5 }}
+                    />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">Unknown — run discovery</Typography>
+                  )}
+                </Grid>
               </Grid>
             </CardContent>
           </Card>
