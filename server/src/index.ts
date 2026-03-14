@@ -58,7 +58,7 @@ async function startServer(): Promise<void> {
     initializeSaml();
 
     // Initialize scheduled jobs
-    initializeScheduler();
+    await initializeScheduler();
     logger.info('Scheduler initialized');
 
     // Start Express server

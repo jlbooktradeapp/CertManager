@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { NotificationSettings } from '../models/NotificationSettings';
 import { sendTestEmail, sendExpirationNotifications } from '../services/notificationService';
 import { syncCertificatesToCalendar } from '../services/calendarService';
+import { scheduleNotificationJob } from '../services/schedulerService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
@@ -130,6 +131,12 @@ export async function updateNotificationSettings(req: AuthenticatedRequest, res:
     }
 
     await settings.save();
+
+    // If scheduleHour was updated, reschedule the notification job immediately
+    if (typeof updates.scheduleHour === 'number') {
+      scheduleNotificationJob(settings.scheduleHour);
+      logger.info(`Notification job rescheduled to ${settings.scheduleHour}:00 ET by ${req.user?.username}`);
+    }
 
     logger.info(`Notification settings updated by ${req.user?.username}`);
 

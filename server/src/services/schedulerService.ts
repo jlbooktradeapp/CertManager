@@ -8,14 +8,34 @@ import { syncAllCAs } from './certificateService';
 import { runDiscovery } from './discoveryService';
 import { NotificationSettings } from '../models/NotificationSettings';
 
+import cron from 'node-cron';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { logger } from '../utils/logger';
+import { sendExpirationNotifications } from './notificationService';
+import { syncAllCAs } from './certificateService';
+import { runDiscovery } from './discoveryService';
+import { NotificationSettings } from '../models/NotificationSettings';
+
 let notificationJob: cron.ScheduledTask | null = null;
 let syncJob: cron.ScheduledTask | null = null;
 let cleanupJob: cron.ScheduledTask | null = null;
 let discoveryJob: cron.ScheduledTask | null = null;
 
-export function initializeScheduler(): void {
-  // Run expiration check daily at 8 AM
-  notificationJob = cron.schedule('0 8 * * *', async () => {
+/**
+ * Schedule (or reschedule) the notification job at the given hour.
+ * Called at startup and whenever scheduleHour is changed in Settings.
+ */
+export function scheduleNotificationJob(hour: number): void {
+  // Stop existing job if running
+  if (notificationJob) {
+    notificationJob.stop();
+    notificationJob = null;
+  }
+
+  const cronExpr = `0 ${hour} * * *`;
+  notificationJob = cron.schedule(cronExpr, async () => {
     logger.info('Running scheduled expiration notification check');
     try {
       const result = await sendExpirationNotifications();
@@ -25,8 +45,25 @@ export function initializeScheduler(): void {
     }
   }, {
     scheduled: true,
-    timezone: 'America/New_York', // Adjust timezone as needed
+    timezone: 'America/New_York',
   });
+
+  logger.info(`Notification job scheduled at ${hour}:00 ET daily (cron: ${cronExpr})`);
+}
+
+export async function initializeScheduler(): Promise<void> {
+  // Read scheduleHour from DB — fall back to 8 if settings not yet configured
+  let scheduleHour = 8;
+  try {
+    const settings = await NotificationSettings.findOne().select('scheduleHour');
+    if (typeof settings?.scheduleHour === 'number') {
+      scheduleHour = settings.scheduleHour;
+    }
+  } catch (err) {
+    logger.warn('Could not read scheduleHour from DB, defaulting to 8 AM:', err);
+  }
+
+  scheduleNotificationJob(scheduleHour);
 
   // Run CA sync every hour
   syncJob = cron.schedule('0 * * * *', async () => {
@@ -64,8 +101,8 @@ export function initializeScheduler(): void {
       logger.info('Running scheduled certificate discovery');
       const stats = await runDiscovery();
       logger.info(
-        `Scheduled discovery complete: probed=${stats.probed}, matched=${stats.matched}, ` +
-        `mismatched=${stats.mismatched}, rebound=${stats.reboundFound}`
+        `Scheduled discovery complete: probed=${stats.hostnamesProbed}, matched=${stats.matched}, ` +
+        `rebound=${stats.reboundFound}`
       );
     } catch (error) {
       logger.error('Scheduled discovery failed:', error);

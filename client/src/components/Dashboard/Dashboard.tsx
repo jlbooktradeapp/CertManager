@@ -22,6 +22,7 @@ import {
   CheckCircle as CheckIcon,
   Sync as SyncIcon,
   Replay as ReissuedIcon,
+  Autorenew as ReboundIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
@@ -29,13 +30,14 @@ import { getCertificateStats, getExpiringCertificates, triggerSync } from '../..
 import { format, differenceInDays } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
 
-const COLORS = ['#4caf50', '#ff9800', '#f44336', '#9e9e9e'];
+const COLORS = ['#4caf50', '#ff9800', '#f44336', '#9e9e9e', '#00897b'];
 
 // Map chart segment names to navigation paths
 const CHART_NAV_MAP: Record<string, string> = {
   Active: '/certificates?status=active',
   'Expiring (30d)': '/certificates?status=expiring&maxDays=30',
   'Critical (7d)': '/certificates?status=expiring&maxDays=7',
+  Rebound: '/certificates?status=rebound',
 };
 
 export default function Dashboard() {
@@ -84,6 +86,7 @@ export default function Dashboard() {
     { name: 'Active', value: (stats?.active || 0) - (stats?.expiringIn30Days || 0) },
     { name: 'Expiring (30d)', value: (stats?.expiringIn30Days || 0) - (stats?.expiringIn7Days || 0) },
     { name: 'Critical (7d)', value: stats?.expiringIn7Days || 0 },
+    { name: 'Rebound', value: stats?.rebound || 0 },
   ].filter(item => item.value > 0);
 
   return (
@@ -103,7 +106,7 @@ export default function Dashboard() {
 
       <Grid container spacing={3}>
         {/* Stats Cards - Clickable */}
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid item xs={12} sm={6} md={2}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates')}>
               <CardContent>
@@ -119,7 +122,7 @@ export default function Dashboard() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid item xs={12} sm={6} md={2}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=active')}>
               <CardContent>
@@ -137,7 +140,7 @@ export default function Dashboard() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid item xs={12} sm={6} md={2}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=expiring&maxDays=30')}>
               <CardContent>
@@ -155,7 +158,7 @@ export default function Dashboard() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid item xs={12} sm={6} md={2}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=expiring&maxDays=7')}>
               <CardContent>
@@ -173,7 +176,7 @@ export default function Dashboard() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid item xs={12} sm={6} md={2}>
           <Card>
             <CardActionArea onClick={() => navigate('/certificates?status=reissued')}>
               <CardContent>
@@ -185,6 +188,24 @@ export default function Dashboard() {
                 </Box>
                 <Typography variant="h4" color="info.main">
                   {stats?.reissued || 0}
+                </Typography>
+              </CardContent>
+            </CardActionArea>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={2}>
+          <Card>
+            <CardActionArea onClick={() => navigate('/certificates?status=rebound')}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <ReboundIcon sx={{ color: '#00897b' }} />
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Rebound
+                  </Typography>
+                </Box>
+                <Typography variant="h4" sx={{ color: '#00897b' }}>
+                  {stats?.rebound || 0}
                 </Typography>
               </CardContent>
             </CardActionArea>

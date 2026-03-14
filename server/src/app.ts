@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
 import { logger } from './utils/logger';
 
 // Route imports
@@ -98,10 +99,29 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// 404 handler
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({ error: 'Not found' });
-});
+// Serve React frontend in production
+// The built client files sit at ../../client/dist relative to server/src
+const clientDistPath = path.join(__dirname, '..', '..', 'client', 'dist');
+
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(clientDistPath));
+
+  // SPA catch-all — any non-API route serves index.html so React Router handles it
+  app.get('*', (req: Request, res: Response) => {
+    // Don't catch API routes — those should 404 normally
+    if (req.path.startsWith(`${API_PREFIX}/`)) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+} else {
+  // Development: Vite serves the frontend on its own port (5173)
+  // API 404 handler only
+  app.use((_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+}
 
 // Error handler — never leak internal details
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

@@ -31,47 +31,56 @@ import {
   LightMode as LightModeIcon,
   Apps as AppsIcon,
   DeleteSweep as CleanupIcon,
+  People as UsersIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../context/AuthContext';
 import { useThemeMode } from '../../context/ThemeContext';
 
 const drawerWidth = 240;
 
-const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
-  { text: 'Certificates', icon: <CertIcon />, path: '/certificates' },
-  { text: 'Certificate Authorities', icon: <CAIcon />, path: '/ca' },
-  { text: 'CSR Requests', icon: <CSRIcon />, path: '/csr' },
-  { text: 'Servers', icon: <ServerIcon />, path: '/servers' },
-  { text: 'Applications', icon: <AppsIcon />, path: '/applications' },
-  { text: 'Cleanup', icon: <CleanupIcon />, path: '/cleanup' },
+// Items visible to ALL authenticated users (Viewer and above)
+const viewerItems = [
+  { text: 'Dashboard',    icon: <DashboardIcon />, path: '/'             },
+  { text: 'Certificates', icon: <CertIcon />,      path: '/certificates' },
+  { text: 'Servers',      icon: <ServerIcon />,    path: '/servers'      },
+  { text: 'Applications', icon: <AppsIcon />,      path: '/applications' },
+];
+
+// Additional items visible to Operators and Admins
+const operatorItems = [
+  { text: 'Certificate Authorities', icon: <CAIcon />,      path: '/ca'      },
+  { text: 'CSR Requests',            icon: <CSRIcon />,     path: '/csr'     },
+  { text: 'Cleanup',                 icon: <CleanupIcon />, path: '/cleanup' },
 ];
 
 export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, isOperator } = useAuth();
   const { mode, toggleTheme } = useThemeMode();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const handleDrawerToggle = () => {
-    setMobileOpen(!mobileOpen);
-  };
-
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setAnchorEl(null);
-  };
-
+  const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget);
+  const handleMenuClose = () => setAnchorEl(null);
   const handleLogout = async () => {
     handleMenuClose();
     await logout();
     navigate('/login');
   };
+
+  const navItem = (item: { text: string; icon: JSX.Element; path: string }) => (
+    <ListItem key={item.text} disablePadding>
+      <ListItemButton
+        selected={location.pathname === item.path}
+        onClick={() => { navigate(item.path); setMobileOpen(false); }}
+      >
+        <ListItemIcon>{item.icon}</ListItemIcon>
+        <ListItemText primary={item.text} />
+      </ListItemButton>
+    </ListItem>
+  );
 
   const drawer = (
     <Box>
@@ -81,42 +90,37 @@ export default function Layout() {
         </Typography>
       </Toolbar>
       <Divider />
+
+      {/* Viewer items — everyone sees these */}
       <List>
-        {menuItems.map((item) => (
-          <ListItem key={item.text} disablePadding>
-            <ListItemButton
-              selected={location.pathname === item.path}
-              onClick={() => {
-                navigate(item.path);
-                setMobileOpen(false);
-              }}
-            >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          </ListItem>
-        ))}
+        {viewerItems.map(navItem)}
       </List>
-      {isAdmin && (
+
+      {/* Operator items — Operators and Admins */}
+      {isOperator && (
         <>
           <Divider />
           <List>
-            <ListItem disablePadding>
-              <ListItemButton
-                selected={location.pathname === '/settings'}
-                onClick={() => {
-                  navigate('/settings');
-                  setMobileOpen(false);
-                }}
-              >
-                <ListItemIcon>
-                  <SettingsIcon />
-                </ListItemIcon>
-                <ListItemText primary="Settings" />
-              </ListItemButton>
-            </ListItem>
+            {operatorItems.map(navItem)}
           </List>
         </>
+      )}
+
+      {/* Settings — Operators and Admins */}
+      {isOperator && (
+        <>
+          <Divider />
+          <List>
+            {navItem({ text: 'Settings', icon: <SettingsIcon />, path: '/settings' })}
+          </List>
+        </>
+      )}
+
+      {/* Users page — Admins only */}
+      {isAdmin && (
+        <List>
+          {navItem({ text: 'Users', icon: <UsersIcon />, path: '/users' })}
+        </List>
       )}
     </Box>
   );
@@ -183,10 +187,7 @@ export default function Layout() {
         </Toolbar>
       </AppBar>
 
-      <Box
-        component="nav"
-        sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
-      >
+      <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
         <Drawer
           variant="temporary"
           open={mobileOpen}
@@ -194,10 +195,7 @@ export default function Layout() {
           ModalProps={{ keepMounted: true }}
           sx={{
             display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: drawerWidth,
-            },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
           }}
         >
           {drawer}
@@ -206,10 +204,7 @@ export default function Layout() {
           variant="permanent"
           sx={{
             display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: drawerWidth,
-            },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
           }}
           open
         >
