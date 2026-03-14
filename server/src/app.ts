@@ -15,6 +15,7 @@ import serverRoutes from './routes/servers';
 import settingsRoutes from './routes/settings';
 import applicationRoutes from './routes/applications';
 import cleanupRoutes from './routes/cleanup';
+import userRoutes from './routes/users';
 
 const app: Application = express();
 
@@ -93,6 +94,7 @@ app.use(`${API_PREFIX}/servers`, serverRoutes);
 app.use(`${API_PREFIX}/settings`, settingsRoutes);
 app.use(`${API_PREFIX}/applications`, applicationRoutes);
 app.use(`${API_PREFIX}/cleanup`, cleanupRoutes);
+app.use(`${API_PREFIX}/users`, userRoutes);
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {

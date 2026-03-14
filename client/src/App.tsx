@@ -15,6 +15,7 @@ import Settings from './components/Settings/Settings';
 import ApplicationList from './components/Applications/ApplicationList';
 import ApplicationDetail from './components/Applications/ApplicationDetail';
 import Cleanup from './components/Cleanup/Cleanup';
+import UserList from './components/Users/UserList';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -84,7 +85,8 @@ function App() {
         <Route path="applications" element={<ApplicationList />} />
         <Route path="applications/:id" element={<ApplicationDetail />} />
         <Route path="cleanup" element={<OperatorRoute><Cleanup /></OperatorRoute>} />
-        <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
+        <Route path="settings" element={<OperatorRoute><Settings /></OperatorRoute>} />
+        <Route path="users" element={<AdminRoute><UserList /></AdminRoute>} />
       </Route>
     </Routes>
   );
