@@ -3,6 +3,7 @@ import { Certificate } from '../models/Certificate';
 import { CSRRequest } from '../models/CSRRequest';
 import { CertificateAuthority } from '../models/CertificateAuthority';
 import { getCertificateStats, updateCertificateStatuses, syncAllCAs } from '../services/certificateService';
+import { runAutoRenewalForCert } from '../services/autoRenewalService';
 import { logger } from '../utils/logger';
 import { AuthenticatedRequest } from '../middleware/auth';
 
@@ -502,5 +503,52 @@ export async function reissueCertificate(req: AuthenticatedRequest, res: Respons
   } catch (error) {
     logger.error('Re-issue certificate error:', error);
     res.status(500).json({ error: 'Failed to create re-issue request' });
+  }
+}
+
+/**
+ * POST /api/certificates/:id/renew
+ *
+ * Admin-only. Triggers the full auto-renewal pipeline for a single certificate
+ * immediately, bypassing the daysBeforeExpiry window check and lastRenewalAt guard.
+ * Intended for testing and manual intervention.
+ */
+export async function triggerAutoRenewal(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+
+    const cert = await Certificate.findById(id);
+    if (!cert) {
+      res.status(404).json({ error: 'Certificate not found' });
+      return;
+    }
+
+    if (cert.status === 'revoked') {
+      res.status(400).json({ error: 'Cannot renew a revoked certificate' });
+      return;
+    }
+
+    if (!cert.serverType) {
+      res.status(400).json({ error: 'Certificate has no serverType set — cannot auto-renew' });
+      return;
+    }
+
+    if (!cert.autoRenew?.enabled) {
+      res.status(400).json({ error: 'Auto-renewal is not enabled on this certificate. Enable it first.' });
+      return;
+    }
+
+    logger.info(`Manual auto-renewal triggered for ${cert.commonName} by admin ${req.user?.username}`);
+
+    const result = await runAutoRenewalForCert(cert);
+
+    res.json({
+      message: `Auto-renewal completed for ${cert.commonName}`,
+      commonName: cert.commonName,
+      ...result,
+    });
+  } catch (error: any) {
+    logger.error('Manual auto-renewal error:', error);
+    res.status(500).json({ error: error.message || 'Auto-renewal failed' });
   }
 }

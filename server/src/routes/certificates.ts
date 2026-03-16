@@ -10,10 +10,11 @@ import {
   updateCertificate,
   deleteCertificate,
   reissueCertificate,
+  triggerAutoRenewal,
 } from '../controllers/certificateController';
 import { triggerDiscovery, getDiscoveryStatus } from '../controllers/discoveryController';
 import { authenticate } from '../middleware/auth';
-import { operatorOrAdmin, anyAuthenticated } from '../middleware/rbac';
+import { operatorOrAdmin, anyAuthenticated, adminOnly } from '../middleware/rbac';
 import { validateObjectId } from '../middleware/validation';
 
 const router = Router();
@@ -53,6 +54,9 @@ router.put('/:id', operatorOrAdmin, validateObjectId('id'), updateCertificate);
 
 // POST /api/certificates/:id/reissue - Create a pre-populated CSR draft for re-issuance
 router.post('/:id/reissue', operatorOrAdmin, validateObjectId('id'), reissueCertificate);
+
+// POST /api/certificates/:id/renew - Admin-only: trigger full auto-renewal pipeline immediately (testing)
+router.post('/:id/renew', adminOnly, validateObjectId('id'), triggerAutoRenewal);
 
 // DELETE /api/certificates/:id - Remove certificate from tracking
 router.delete('/:id', operatorOrAdmin, validateObjectId('id'), deleteCertificate);

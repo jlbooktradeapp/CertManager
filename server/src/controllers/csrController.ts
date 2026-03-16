@@ -668,6 +668,36 @@ export async function deliverCSR(req: AuthenticatedRequest, res: Response): Prom
       csr.deliveredAt = new Date();
       csr.privateKeyLocation = undefined;
       updateWorkflowStep(csr, 'Deliver Certificate', 'completed');
+
+      // Link the issued certificate to the Certificate inventory and stamp serverType.
+      // The CA sync will have already created the Certificate record by the time
+      // delivery runs — find it by thumbprint or serial and mark it as apache.
+      const thumbprintToMatch = csr.issuedThumbprint;
+      const serialToMatch = csr.issuedSerialNumber;
+
+      if (thumbprintToMatch || serialToMatch) {
+        try {
+          let linkedCert = thumbprintToMatch
+            ? await Certificate.findOne({ thumbprint: thumbprintToMatch })
+            : null;
+
+          if (!linkedCert && serialToMatch) {
+            linkedCert = await Certificate.findOne({ serialNumber: serialToMatch });
+          }
+
+          if (linkedCert) {
+            csr.issuedCertificateId = linkedCert._id;
+            if (!linkedCert.serverType) {
+              linkedCert.serverType = 'apache';
+              await linkedCert.save();
+            }
+            logger.info(`Linked Apache CSR ${csr._id} to Certificate ${linkedCert._id} (${linkedCert.thumbprint})`);
+          }
+        } catch (linkErr) {
+          logger.warn(`Could not link issued certificate for ${csr.commonName}: ${linkErr}`);
+        }
+      }
+
       await csr.save();
 
       logger.info(`Certificate for ${csr.commonName} delivered to ${csr.deliveryEmails.join(', ')} by ${req.user?.username}`);

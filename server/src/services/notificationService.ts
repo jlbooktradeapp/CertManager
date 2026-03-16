@@ -613,3 +613,80 @@ export async function sendTestEmail(to: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Send an alert email to global notification recipients when one or more
+ * auto-renewal jobs fail. Called by the scheduler immediately after runAutoRenewal().
+ */
+export async function sendAutoRenewalFailureAlert(
+  failures: Array<{ certId: string; commonName: string; error: string }>
+): Promise<void> {
+  if (failures.length === 0) return;
+
+  try {
+    const settings = await NotificationSettings.findOne();
+    const recipients = settings?.recipients ?? [];
+
+    if (recipients.length === 0) {
+      logger.warn('Auto-renewal failure alert: no global recipients configured, skipping email');
+      return;
+    }
+
+    const transporter = createMailTransporter();
+    const config = getMailConfig();
+
+    const rows = failures.map(f => `
+      <tr>
+        <td style="padding: 8px 12px; border: 1px solid #ddd;">${escapeHtml(f.commonName)}</td>
+        <td style="padding: 8px 12px; border: 1px solid #ddd; color: #d32f2f;">${escapeHtml(f.error)}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <body style="font-family: Arial, sans-serif; color: #333; padding: 20px;">
+        <h2 style="color: #d32f2f;">⚠ Auto-Renewal Failures — Action Required</h2>
+        <p>
+          The scheduled auto-renewal job ran at ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET
+          and encountered ${failures.length} failure${failures.length === 1 ? '' : 's'}.
+          The certificates listed below were <strong>not renewed</strong> and require manual attention.
+        </p>
+        <table style="border-collapse: collapse; width: 100%; margin: 16px 0;">
+          <thead>
+            <tr style="background: #f5f5f5;">
+              <th style="padding: 8px 12px; border: 1px solid #ddd; text-align: left;">Common Name</th>
+              <th style="padding: 8px 12px; border: 1px solid #ddd; text-align: left;">Error</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p>Log into Certificate Manager to re-issue these certificates manually or investigate the cause.</p>
+        <p style="color: #666; font-size: 12px; margin-top: 30px;">
+          This is an automated message from Certificate Manager.
+        </p>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: config.from,
+      to: recipients.join(', '),
+      subject: `[CertManager] Auto-Renewal Failed: ${failures.length} certificate${failures.length === 1 ? '' : 's'} not renewed`,
+      html,
+    });
+
+    logger.info(`Auto-renewal failure alert sent to ${recipients.length} recipient(s)`);
+  } catch (err: any) {
+    logger.error(`Failed to send auto-renewal failure alert: ${err.message}`);
+  }
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}

@@ -3,22 +3,14 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { logger } from '../utils/logger';
-import { sendExpirationNotifications } from './notificationService';
+import { sendExpirationNotifications, sendAutoRenewalFailureAlert } from './notificationService';
 import { syncAllCAs } from './certificateService';
 import { runDiscovery } from './discoveryService';
-import { NotificationSettings } from '../models/NotificationSettings';
-
-import cron from 'node-cron';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { logger } from '../utils/logger';
-import { sendExpirationNotifications } from './notificationService';
-import { syncAllCAs } from './certificateService';
-import { runDiscovery } from './discoveryService';
+import { runAutoRenewal } from './autoRenewalService';
 import { NotificationSettings } from '../models/NotificationSettings';
 
 let notificationJob: cron.ScheduledTask | null = null;
+let autoRenewalJob: cron.ScheduledTask | null = null;
 let syncJob: cron.ScheduledTask | null = null;
 let cleanupJob: cron.ScheduledTask | null = null;
 let discoveryJob: cron.ScheduledTask | null = null;
@@ -65,7 +57,31 @@ export async function initializeScheduler(): Promise<void> {
 
   scheduleNotificationJob(scheduleHour);
 
-  // Run CA sync every hour
+  // Auto-renewal: runs daily at 8:30 AM ET (30 minutes after notifications)
+  // Queries certs with autoRenew.enabled = true within their daysBeforeExpiry window
+  // and runs the full generate → submit → deliver/install pipeline for each.
+  autoRenewalJob = cron.schedule(`30 ${scheduleHour} * * *`, async () => {
+    logger.info('Running scheduled auto-renewal job');
+    try {
+      const result = await runAutoRenewal();
+      logger.info(
+        `Auto-renewal complete: ${result.succeeded} succeeded, ${result.failed} failed, ${result.skipped} skipped`
+      );
+      if (result.failures.length > 0) {
+        logger.warn(
+          `Auto-renewal failures:\n${result.failures.map(f => `  ${f.commonName}: ${f.error}`).join('\n')}`
+        );
+        await sendAutoRenewalFailureAlert(result.failures);
+      }
+    } catch (error) {
+      logger.error('Auto-renewal job threw an unhandled error:', error);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'America/New_York',
+  });
+
+  logger.info(`Auto-renewal job scheduled at ${scheduleHour}:30 ET daily`);
   syncJob = cron.schedule('0 * * * *', async () => {
     logger.info('Running scheduled CA sync');
     try {
@@ -119,6 +135,11 @@ export function stopScheduler(): void {
   if (notificationJob) {
     notificationJob.stop();
     notificationJob = null;
+  }
+
+  if (autoRenewalJob) {
+    autoRenewalJob.stop();
+    autoRenewalJob = null;
   }
 
   if (syncJob) {
