@@ -24,8 +24,9 @@ import {
   FormControl,
   InputLabel,
   FormHelperText,
-} from '@mui/material';
-import {
+  Switch,
+  FormControlLabel,
+} from '@mui/material';import {
   ArrowBack as BackIcon,
   Delete as DeleteIcon,
   Email as EmailIcon,
@@ -38,7 +39,7 @@ import {
   Refresh as ReissueIcon,
 } from '@mui/icons-material';
 import { format, differenceInDays } from 'date-fns';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { getCertificate, deleteCertificate, updateCertificate, reissueCertificate } from '../../services/certificates';
 import api from '../../services/api';
 import { Application, PaginatedResponse } from '../../types';
@@ -68,11 +69,21 @@ export default function CertificateDetail() {
   const [reissueEmails, setReissueEmails] = useState('');
   const [reissueEmailError, setReissueEmailError] = useState('');
 
+  // Auto-renewal state (toggle saves immediately)
+  const [autoRenewEnabled, setAutoRenewEnabled] = useState(false);
+
   const { data: cert, isLoading, error } = useQuery({
     queryKey: ['certificate', id],
     queryFn: () => getCertificate(id!),
     enabled: !!id,
   });
+
+  // Sync toggle state when cert loads
+  useEffect(() => {
+    if (cert?.autoRenew) {
+      setAutoRenewEnabled(cert.autoRenew.enabled);
+    }
+  }, [cert]);
 
   const { data: appResults } = useQuery({
     queryKey: ['applications-search', appSearchInput],
@@ -126,6 +137,16 @@ export default function CertificateDetail() {
     onSuccess: (data) => {
       setReissueDialogOpen(false);
       navigate(`/csr/${data.csrId}`);
+    },
+  });
+
+  const updateAutoRenewMutation = useMutation({
+    mutationFn: (patch: { enabled?: boolean; daysBeforeExpiry?: number; targetCAId?: string | null; targetServerId?: string | null; deliveryEmails?: string[] }) => {
+      return updateCertificate(id!, { autoRenew: patch });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['certificate', id] });
+      setAutoRenewDirty(false);
     },
   });
 
@@ -198,6 +219,25 @@ export default function CertificateDetail() {
           {cert.commonName}
         </Typography>
         <Chip label={cert.status} color={statusColors[cert.status]} sx={{ textTransform: 'capitalize' }} />
+        {isOperator && cert.status !== 'reissued' && cert.status !== 'revoked' && (
+          <Tooltip title={!cert.serverType ? 'Set a server type on this certificate before enabling auto-renewal' : ''}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={autoRenewEnabled}
+                  onChange={(e) => {
+                    setAutoRenewEnabled(e.target.checked);
+                    updateAutoRenewMutation.mutate({ enabled: e.target.checked });
+                  }}
+                  disabled={!cert.serverType || updateAutoRenewMutation.isPending}
+                  size="small"
+                />
+              }
+              label={<Typography variant="body2">Auto-Renewal</Typography>}
+              sx={{ mr: 0 }}
+            />
+          </Tooltip>
+        )}
         {isOperator && cert.status !== 'reissued' && cert.status !== 'revoked' && (
           <Button
             color="primary"

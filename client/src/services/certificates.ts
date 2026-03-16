@@ -59,7 +59,15 @@ export async function deleteCertificate(id: string) {
   return response.data;
 }
 
-export async function updateCertificate(id: string, data: { notificationRecipients?: string[]; applicationId?: string | null; status?: string }) {
+export interface AutoRenewUpdate {
+  enabled?: boolean;
+  daysBeforeExpiry?: number;
+  targetCAId?: string | null;
+  targetServerId?: string | null;
+  deliveryEmails?: string[];
+}
+
+export async function updateCertificate(id: string, data: { notificationRecipients?: string[]; applicationId?: string | null; status?: string; autoRenew?: AutoRenewUpdate }) {
   const response = await api.put<Certificate>(`/certificates/${id}`, data);
   return response.data;
 }
