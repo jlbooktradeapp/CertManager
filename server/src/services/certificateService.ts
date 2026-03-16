@@ -275,11 +275,31 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
 
     logger.info(`Processing ${certificates.length} certificates from ${ca.name}`);
 
+    // SYNC-DIAG: log raw fields for every cert returned by PowerShell
+    for (let i = 0; i < certificates.length; i++) {
+      const c = certificates[i];
+      logger.info(
+        `[SYNC-DIAG] [${i + 1}/${certificates.length}] ` +
+        `RequestID=${c.RequestID ?? 'NULL'} | ` +
+        `SerialNumber=${c.SerialNumber ?? 'NULL'} | ` +
+        `Thumbprint=${c.Thumbprint ?? 'NULL'} | ` +
+        `CommonName=${c.CommonName ?? 'NULL'} | ` +
+        `NotBefore=${c.NotBefore ?? 'NULL'} | ` +
+        `NotAfter=${c.NotAfter ?? 'NULL'}`
+      );
+    }
+
     let syncedCount = 0;
 
     for (const certData of certificates) {
+      // SYNC-DIAG: warn loudly if SerialNumber is missing — upsert will match wrong records
+      if (!certData.SerialNumber) {
+        logger.error(`[SYNC-DIAG] SerialNumber is NULL/empty for CN=${certData.CommonName} RequestID=${certData.RequestID} — skipping to avoid corrupting existing records`);
+        continue;
+      }
+
       try {
-        await Certificate.findOneAndUpdate(
+        const upsertResult = await Certificate.findOneAndUpdate(
           { serialNumber: certData.SerialNumber },
           {
             $set: {
@@ -312,17 +332,47 @@ export async function syncCA(ca: ICertificateAuthority): Promise<number> {
           },
           { upsert: true, new: true }
         );
+
+        // SYNC-DIAG: log whether this was an insert or an update, and what _id was affected
+        const wasInsert = upsertResult && upsertResult.metadata?.discoveredAt &&
+          Math.abs(new Date(upsertResult.metadata.discoveredAt).getTime() - Date.now()) < 5000;
+        logger.info(
+          `[SYNC-DIAG] Upsert done — Serial=${certData.SerialNumber} | ` +
+          `CN=${certData.CommonName} | ` +
+          `_id=${upsertResult?._id} | ` +
+          `DB commonName=${upsertResult?.commonName} | ` +
+          `discoveredAt=${upsertResult?.metadata?.discoveredAt}`
+        );
+
         syncedCount++;
-      } catch (error) {
-        logger.error(`Failed to sync certificate ${certData.SerialNumber}:`, error);
+      } catch (error: any) {
+        logger.error(
+          `[SYNC-DIAG] Upsert FAILED — Serial=${certData.SerialNumber} | CN=${certData.CommonName} | Error: ${error?.message || error}`,
+          error
+        );
       }
     }
 
-    // Update CA: lastSyncedAt and lastRequestID watermark
+    // Update CA: lastSyncedAt and lastRequestID watermark.
+    //
+    // SAFETY BUFFER: The CA's ICertView COM interface can lag slightly — a cert
+    // issued seconds before a sync query may not yet be visible, causing the
+    // watermark to advance past it permanently. To prevent this, we hold the
+    // watermark 20 RequestIDs behind the highest seen. Each sync therefore
+    // re-processes the last 20 IDs from the previous run. Since the upsert is
+    // idempotent (match on serialNumber), re-processing existing certs is harmless.
+    const WATERMARK_SAFETY_BUFFER = 20;
     ca.lastSyncedAt = new Date();
     if (result.lastRequestID && result.lastRequestID > (ca.lastRequestID || 0)) {
-      ca.lastRequestID = result.lastRequestID;
-      logger.info(`Updated ${ca.name} RequestID watermark to ${ca.lastRequestID}`);
+      const bufferedWatermark = Math.max(
+        ca.lastRequestID || 0,
+        result.lastRequestID - WATERMARK_SAFETY_BUFFER
+      );
+      ca.lastRequestID = bufferedWatermark;
+      logger.info(
+        `Updated ${ca.name} RequestID watermark to ${bufferedWatermark} ` +
+        `(raw lastID: ${result.lastRequestID}, buffer: ${WATERMARK_SAFETY_BUFFER})`
+      );
     }
     await ca.save();
 
